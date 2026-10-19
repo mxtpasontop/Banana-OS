@@ -378,6 +378,50 @@ static void t_tlb(void) {
 #endif
 }
 
+/* ── the terminal: scrollback, and what comes after it ── */
+/* a line of a vt's text as a string (its trailing blanks cut) */
+static void cells_str(const uint32_t* ch, int n, char* out, int cap) {
+    int o = 0;
+    for (int i = 0; i < n && ch && o + 4 < cap; i++) o += u8_encode(ch[i] ? ch[i] : ' ', out + o);
+    while (o > 0 && out[o - 1] == ' ') o--;
+    out[o] = 0;
+}
+
+static void t_terminal(void) {
+    section("the terminal: scrollback");
+    int vt = terminal_vt_alloc(), was = terminal_vt_get_active();
+    if (vt < 0) { skip("the terminal checks", "no free virtual terminal to write to"); return; }
+    terminal_vt_set_size(vt, 20, 5);
+    terminal_vt_set_active(vt);
+    for (int i = 1; i <= 20; i++) {
+        char l[16];
+        ksnprintf(l, sizeof(l), "line %d\n", i);
+        terminal_write(l);
+    }
+    terminal_vt_set_active(was);
+    int hist = terminal_vt_history(vt);
+    const uint32_t* hc;
+    const uint8_t* hco;
+    char newest[32] = "", oldest[32] = "";
+    terminal_vt_history_line(vt, 1, &hc, &hco);
+    cells_str(hc, 20, newest, sizeof(newest));
+    terminal_vt_history_line(vt, hist, &hc, &hco);
+    cells_str(hc, 20, oldest, sizeof(oldest));
+    char note[96];
+    ksnprintf(note, sizeof(note), "%d lines kept; the oldest \"%s\", the newest \"%s\"", hist, oldest, newest);
+    /* 20 lines and an empty one under them in 5 rows: lines 1..16 scrolled off */
+    report("lines that scroll off the top are kept", hist == 16 && !strcmp(oldest, "line 1") && !strcmp(newest, "line 16"), note);
+    int moved = terminal_vt_set_view(vt, 10, hist);
+    int at = terminal_vt_view(vt);
+    terminal_vt_set_active(vt);
+    terminal_write("x");
+    terminal_vt_set_active(was);
+    ksnprintf(note, sizeof(note), "10 lines back, then %d after new output", terminal_vt_view(vt));
+    report("the view scrolls back, and new output brings it back", moved && at == 10 && terminal_vt_view(vt) == 0, note);
+    terminal_vt_clear_history(vt);
+    terminal_vt_free(vt);
+}
+
 /* ── neofetch's GPU lines: the real controllers, the active one named ── */
 static void t_gpu_names(void) {
     gpu_name_t gn[4];
@@ -983,8 +1027,8 @@ static void t_clip(void) {
 
 int selftest_cmd(int argc, char** argv) {
     const char* only = argc > 1 ? argv[1] : NULL;
-    if (only && strcmp(only, "llvmpipe") && strcmp(only, "virgl") && strcmp(only, "gpu") && strcmp(only, "ring3") && strcmp(only, "memory") && strcmp(only, "ram") && strcmp(only, "sleep") && strcmp(only, "limits") && strcmp(only, "cores") && strcmp(only, "clock") && strcmp(only, "malloc") && strcmp(only, "avx") && strcmp(only, "syscall") && strcmp(only, "disk") && strcmp(only, "heap") && strcmp(only, "tlb") && strcmp(only, "net") && strcmp(only, "boottime") && strcmp(only, "utf8") && strcmp(only, "ipv6") && strcmp(only, "opencl") && strcmp(only, "posix") && strcmp(only, "browser") && strcmp(only, "mouse") && strcmp(only, "boot") && strcmp(only, "zip") && strcmp(only, "clipboard") && strcmp(only, "swap") && strcmp(only, "time") && strcmp(only, "keyboard")) {
-        terminal_writeln("usage: selftest [llvmpipe | virgl | gpu | ring3 | memory | ram | sleep [cycle] | limits | cores | clock | malloc | avx | syscall | disk | heap | tlb | net | boottime | utf8 | opencl | browser [swm] | mouse [demo] | boot | posix [part] | zip | clipboard | swap | time | keyboard | ipv6 [host [port]]]   (filesystems: fstest <mount point>)");
+    if (only && strcmp(only, "llvmpipe") && strcmp(only, "virgl") && strcmp(only, "gpu") && strcmp(only, "ring3") && strcmp(only, "memory") && strcmp(only, "ram") && strcmp(only, "sleep") && strcmp(only, "limits") && strcmp(only, "cores") && strcmp(only, "clock") && strcmp(only, "malloc") && strcmp(only, "avx") && strcmp(only, "syscall") && strcmp(only, "disk") && strcmp(only, "heap") && strcmp(only, "tlb") && strcmp(only, "net") && strcmp(only, "boottime") && strcmp(only, "utf8") && strcmp(only, "terminal") && strcmp(only, "ipv6") && strcmp(only, "opencl") && strcmp(only, "posix") && strcmp(only, "browser") && strcmp(only, "mouse") && strcmp(only, "boot") && strcmp(only, "zip") && strcmp(only, "clipboard") && strcmp(only, "swap") && strcmp(only, "time") && strcmp(only, "keyboard")) {
+        terminal_writeln("usage: selftest [llvmpipe | virgl | gpu | ring3 | memory | ram | sleep [cycle] | limits | cores | clock | malloc | avx | syscall | disk | heap | tlb | net | boottime | utf8 | terminal | opencl | browser [swm] | mouse [demo] | boot | posix [part] | zip | clipboard | swap | time | keyboard | ipv6 [host [port]]]   (filesystems: fstest <mount point>)");
         return 1;
     }
     if(only && (!strcmp(only,"virgl") || !strcmp(only,"llvmpipe")) && argc!=2) { terminal_writeln("usage: selftest virgl | llvmpipe");return 1; }
@@ -1030,6 +1074,7 @@ int selftest_cmd(int argc, char** argv) {
                      only && !strcmp(only, "net") ? "selftest: checking TCP" :
                      only && !strcmp(only, "boottime") ? "selftest: checking the boot's timeline" :
                      only && !strcmp(only, "utf8") ? "selftest: checking UTF-8" :
+                     only && !strcmp(only, "terminal") ? "selftest: checking the terminal" :
                      "selftest: checking the system (it runs the systest app a few times)");
     if(only && !strcmp(only,"llvmpipe")) {
         section("LLVMpipe CPU rendering (optional Mesa/LLVM libraries)");t_gl3("llvmpipe");
@@ -1072,6 +1117,8 @@ int selftest_cmd(int argc, char** argv) {
         t_boottime();
     } else if (only && !strcmp(only, "utf8")) {
         t_utf8();
+    } else if (only && !strcmp(only, "terminal")) {
+        t_terminal();
     } else if (only && !strcmp(only, "opencl")) {
         t_opencl();
     } else if (only && !strcmp(only, "posix")) {
@@ -1094,6 +1141,7 @@ int selftest_cmd(int argc, char** argv) {
         if (!only) t_net();
         if (!only) t_boottime();
         if (!only) t_utf8();
+        if (!only) t_terminal();
         if (!only) {
             t_opencl();
             browser_test_run(report);

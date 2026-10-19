@@ -507,6 +507,39 @@ static int term_row_off(const term_win_t* w, int max_rows, int th) {
     return row_off;
 }
 
+/* the first row shown, counting the view scrolled back (negative: lines of
+ * the scrollback); clamps the view to what there is */
+static int term_view_base(const term_win_t* w, int max_rows, int th) {
+    int row_off = term_row_off(w, max_rows, th);
+    int max = terminal_vt_history(w->vt) + row_off;
+    int back = terminal_vt_view(w->vt);
+    if (back > max) { terminal_vt_set_view(w->vt, max, max); back = max; }
+    return row_off - back;
+}
+
+/* a cell of a window's text: row < 0 is in the scrollback (-1 its newest line) */
+static void term_cell(const term_win_t* w, const uint32_t* chars, const uint8_t* cols, int stride, int row, int col,
+                      uint32_t* ch, uint8_t* co) {
+    if (row >= 0) { *ch = chars[row * stride + col]; *co = cols[row * stride + col]; return; }
+    const uint32_t* hc;
+    const uint8_t* hco;
+    terminal_vt_history_line(w->vt, -row, &hc, &hco);
+    *ch = hc ? hc[col] : ' ';
+    *co = hco ? hco[col] : 0x07;
+}
+
+/* the view delta lines further back (+) or forward; 1 if it moved */
+static int term_scroll_by(term_win_t* w, int delta) {
+    const uint32_t* chars;
+    const uint8_t* cols;
+    int tw, th, stride;
+    terminal_vt_get_buffer(w->vt, &chars, &cols, &tw, &th, &stride);
+    int max_rows = (w->h - TERM_TITLE_H - TERM_PAD * 2) / gfx_cell_h();
+    if (max_rows > th) max_rows = th;
+    int max = terminal_vt_history(w->vt) + term_row_off(w, max_rows, th);
+    return terminal_vt_set_view(w->vt, terminal_vt_view(w->vt) + delta, max);
+}
+
 /* the text cell under the mouse (buffer coordinates), clamped to the grid */
 static void term_cell_at(const term_win_t* w, int mx, int my, int* r, int* c) {
     const uint32_t* chars;
@@ -521,7 +554,7 @@ static void term_cell_at(const term_win_t* w, int mx, int my, int* r, int* c) {
     if (y < 0) y = 0;
     if (x >= max_cols) x = max_cols - 1;
     if (y >= max_rows) y = max_rows - 1;
-    *r = y + term_row_off(w, max_rows, th);
+    *r = y + term_view_base(w, max_rows, th);
     *c = x;
 }
 
@@ -549,7 +582,9 @@ static void term_copy_selection(const term_win_t* w) {
         int a = r == r0 ? c0 : 0, b = r == r1 ? c1 : tw - 1;
         uint32_t line_start = n;
         for (int c = a; c <= b && c < tw; c++) {
-            uint32_t ch = chars[r * stride + c];
+            uint32_t ch;
+            uint8_t co;
+            term_cell(w, chars, cols, stride, r, c, &ch, &co);
             if (ch >= 0x80) n += (uint32_t)u8_encode(ch, out + n);
             else out[n++] = ch ? (char)ch : ' ';
         }
@@ -664,14 +699,14 @@ static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
      * the same way a real terminal emulator's viewport tracks output. */
     size_t cr = 0, cc = 0;
     terminal_vt_get_cursor(win->vt, &cr, &cc);
-    int row_off = term_row_off(win, max_rows, th);
+    int base = term_view_base(win, max_rows, th);      /* (scrolled back: lines of the scrollback on top) */
 
     for (int y = 0; y < max_rows; y++) {
         for (int x = 0; x < max_cols; x++) {
-            int idx = (y + row_off) * stride + x;
-            uint8_t color = cols[idx];
-            uint32_t c = chars[idx];
-            if (term_cell_selected(win, y + row_off, x)) {     /* selection: inverted */
+            uint8_t color;
+            uint32_t c;
+            term_cell(win, chars, cols, stride, y + base, x, &c, &color);
+            if (term_cell_selected(win, y + base, x)) {     /* selection: inverted */
                 gfx_draw_cell_cp(cx + x * CW, cy + y * CH, c ? c : ' ', 0x00101010u, 0x00C8D8F0u);
                 continue;
             }
@@ -685,7 +720,7 @@ static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
     gfx_draw_grip(w.x + w.w, w.y + w.h);
 
     {
-        int scr_row = (int)cr - row_off;
+        int scr_row = (int)cr - base;                 /* (scrolled back: below the window) */
         if (scr_row >= 0 && scr_row < max_rows && (int)cc < max_cols) {
             int idx = (int)cr * stride + (int)cc;
             uint8_t color = cols[idx];
@@ -2954,6 +2989,8 @@ static void gui_poll_body(void) {
             /* the wheel scrolls the window under the mouse */
             int h = z_at(mx, my);
             if ((h >> 8) == WK_APP && g_app_wheel[h & 0xFF]) g_app_wheel[h & 0xFF](mx, my, ms.dz);
+            /* a terminal: its scrollback, 3 lines a notch (the wheel up: back) */
+            if ((h >> 8) == WK_TERM && g_terms[h & 0xFF].vt > 0 && term_scroll_by(&g_terms[h & 0xFF], -ms.dz * 3)) g_force_redraw = 1;
         }
         if (mx < 0) mx = 0;
         if (my < 0) my = 0;

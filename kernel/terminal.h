@@ -99,4 +99,14 @@ void terminal_write_at(const char* str, uint8_t fg, uint8_t bg, size_t row, size
 /* what VGA text mode shows for a Unicode character (code page 437; '?' if it has none) */
 char terminal_cp437(uint32_t cp);
 
+/* Scrollback: the lines that scrolled off a vt's top (2000 kept), and its
+ * view - lines back from the live text (new output brings it back) */
+int  terminal_vt_history(int vt);                 /* how many lines */
+/* the line `back` lines up (1: the newest); NULLs if there is none */
+void terminal_vt_history_line(int vt, int back, const uint32_t** chars, const uint8_t** colors);
+void terminal_vt_clear_history(int vt);
+int  terminal_vt_view(int vt);
+int  terminal_vt_set_view(int vt, int back, int max);   /* 1 if it moved */
+int  terminal_vt_scroll_view(int vt, int delta);        /* + is back (up); 1 if it moved */
+
 #endif

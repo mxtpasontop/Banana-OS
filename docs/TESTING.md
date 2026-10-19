@@ -60,6 +60,9 @@ selftest utf8            a terminal's cells hold any character (é € Ω Ж ─
                          U+FFFF, a stray byte as U+FFFD); DejaVu Sans Mono draws what
                          the 8x8 font has not; VGA text mode's code page 437; UTF-8 to
                          UTF-16 and back (FAT32 / exFAT names, surrogate pairs)
+selftest terminal        the terminal's scrollback: lines that scroll off a 5-row
+                         terminal are kept, oldest to newest; the view scrolls back
+                         and new output brings it back down
 selftest opencl          installs and runs the cltest example: build errors in the
                          log, vadd, a 2D Mandelbrot range, atomics, math built-ins,
                          __local arguments, barrier(), local arrays, float4 / int /

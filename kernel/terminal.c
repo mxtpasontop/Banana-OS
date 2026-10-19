@@ -48,6 +48,48 @@ static int     vt_active = 0;
 static size_t  vt_cols[VT_MAX];
 static size_t  vt_rows[VT_MAX];
 
+/* Scrollback: the lines that scrolled off the top of each vt, a ring of
+ * SB_LINES (made when the first one goes), and how far back its view is
+ * (0: the live text; new output brings it back) */
+#define SB_LINES 2000
+typedef struct { uint32_t* ch; uint8_t* co; uint32_t head, count; } scrollback_t;
+static scrollback_t vt_sb[VT_MAX];
+static int          vt_back[VT_MAX];
+
+static void sb_push(int vt, const uint32_t* ch, const uint8_t* co, size_t w) {
+    scrollback_t* s = &vt_sb[vt];
+    if (!s->ch) {
+        s->ch = (uint32_t*)kmalloc(SB_LINES * FB_MAX_COLS * sizeof(uint32_t));
+        s->co = (uint8_t*)kmalloc(SB_LINES * FB_MAX_COLS);
+        if (!s->ch || !s->co) { kfree(s->ch); kfree(s->co); s->ch = NULL; s->co = NULL; return; }
+        s->head = s->count = 0;
+    }
+    uint32_t at = s->head;
+    for (size_t x = 0; x < FB_MAX_COLS; x++) {
+        s->ch[at * FB_MAX_COLS + x] = x < w ? ch[x] : ' ';
+        s->co[at * FB_MAX_COLS + x] = x < w ? co[x] : co[0];
+    }
+    s->head = (s->head + 1) % SB_LINES;
+    if (s->count < SB_LINES) s->count++;
+    if (vt_back[vt]) vt_back[vt]++;                 /* (a view scrolled back stays on the same text) */
+}
+
+int terminal_vt_history(int vt) { return vt >= 0 && vt < VT_MAX ? (int)vt_sb[vt].count : 0; }
+
+void terminal_vt_history_line(int vt, int back, const uint32_t** ch, const uint8_t** co) {
+    *ch = NULL; *co = NULL;
+    if (vt < 0 || vt >= VT_MAX || back < 1 || (uint32_t)back > vt_sb[vt].count) return;
+    uint32_t i = (vt_sb[vt].head + SB_LINES - (uint32_t)back) % SB_LINES;
+    *ch = vt_sb[vt].ch + i * FB_MAX_COLS;
+    *co = vt_sb[vt].co + i * FB_MAX_COLS;
+}
+
+void terminal_vt_clear_history(int vt) {
+    if (vt < 0 || vt >= VT_MAX) return;
+    vt_sb[vt].head = vt_sb[vt].count = 0;
+    vt_back[vt] = 0;
+}
+
 /* bumped on every change to any vt (text, colours, cursor): the GUI
  * compares it to decide whether terminal windows need repainting */
 static volatile uint32_t g_term_gen = 1;
@@ -163,13 +205,26 @@ static void mark_all_dirty(void) {
 static void fb_draw_cell(size_t row, size_t col) {
     if (row >= terminal_fb_rows() || col >= terminal_fb_cols()) return;
     uint8_t color = vt_colors[CONSOLE_VT][row][col];
+    uint32_t cp = vt_chars[CONSOLE_VT][row][col];
+    int v = (int)row - vt_back[CONSOLE_VT];        /* (scrolled back: the lines above come from the scrollback) */
+    if (v < 0) {
+        const uint32_t* hc;
+        const uint8_t* hco;
+        terminal_vt_history_line(CONSOLE_VT, -v, &hc, &hco);
+        cp = hc ? hc[col] : ' ';
+        color = hco ? hco[col] : vt_color[CONSOLE_VT];
+    } else if (vt_back[CONSOLE_VT]) {
+        cp = vt_chars[CONSOLE_VT][v][col];
+        color = vt_colors[CONSOLE_VT][v][col];
+    }
     int scale = term_fb_scale < 1 ? 1 : term_fb_scale;
-    gfx_draw_char_scaled_cp((int)col * 8 * scale, (int)row * 8 * scale, scale, vt_chars[CONSOLE_VT][row][col],
+    gfx_draw_char_scaled_cp((int)col * 8 * scale, (int)row * 8 * scale, scale, cp,
                          vga_color_rgb(color & 0x0F), vga_color_rgb((color >> 4) & 0x0F));
 }
 
 static void fb_draw_cursor_overlay(size_t row, size_t col) {
     if (row >= terminal_fb_rows() || col >= terminal_fb_cols()) return;
+    if (vt_back[CONSOLE_VT]) { g_ov_valid = 0; return; }      /* (scrolled back: the cursor is below the view) */
     g_ov_valid = 1;
     g_ov_row = row;
     g_ov_col = col;
@@ -391,6 +446,7 @@ static void terminal_scroll(void) {
     size_t w = terminal_width();
 
     if ((term_mode == TERMINAL_MODE_FRAMEBUFFER && gfx_available()) || term_mode == TERMINAL_MODE_SUSPENDED) {
+        sb_push(vt_active, vt_chars[vt_active][0], vt_colors[vt_active][0], w);     /* (the top line: into the scrollback) */
         memmove(&vt_chars[vt_active][0][0], &vt_chars[vt_active][1][0], (h - 1) * FB_MAX_COLS * sizeof(vt_chars[0][0][0]));
         memmove(&vt_colors[vt_active][0][0], &vt_colors[vt_active][1][0], (h - 1) * FB_MAX_COLS);
         for (size_t x = 0; x < w; x++) {
@@ -506,6 +562,12 @@ void terminal_putchar(char c) {
         } else {
             vt_u8_need[v] = 0;
         }
+    }
+
+    /* new output: a view scrolled back comes back to the live text */
+    if (vt_back[vt_active]) {
+        vt_back[vt_active] = 0;
+        if (vt_active == CONSOLE_VT && fb_console_on()) { mark_all_dirty(); g_pending_scroll = 0; }
     }
 
     size_t h = terminal_usable_height();
@@ -826,6 +888,7 @@ void terminal_vt_set_size(int vt, int cols, int rows) {
     /* the cursor's line stays visible: scroll the text up if the window got shorter */
     if (vt_row[vt] >= (size_t)rows) {
         size_t sh = vt_row[vt] - (size_t)rows + 1;
+        for (size_t y = 0; y < sh; y++) sb_push(vt, vt_chars[vt][y], vt_colors[vt][y], old_cols);
         memmove(&vt_chars[vt][0][0], &vt_chars[vt][sh][0], (FB_MAX_ROWS - sh) * FB_MAX_COLS * sizeof(vt_chars[0][0][0]));
         memmove(&vt_colors[vt][0][0], &vt_colors[vt][sh][0], (FB_MAX_ROWS - sh) * FB_MAX_COLS);
         for (size_t y = FB_MAX_ROWS - sh; y < FB_MAX_ROWS; y++)
@@ -844,4 +907,26 @@ void terminal_vt_set_size(int vt, int cols, int rows) {
     vt_rows[vt] = (size_t)rows;
     if (vt == vt_active) { term_row = vt_row[vt]; term_col = vt_col[vt]; }
     g_term_gen++;
+}
+
+/* ── the scrollback's view ── */
+int terminal_vt_view(int vt) { return vt >= 0 && vt < VT_MAX ? vt_back[vt] : 0; }
+
+/* the view max lines back at most (the caller's limit: a window also has
+ * the vt's rows above what it shows); 1 if it moved */
+int terminal_vt_set_view(int vt, int back, int max) {
+    if (vt < 0 || vt >= VT_MAX) return 0;
+    if (back > max) back = max;
+    if (back < 0) back = 0;
+    if (back == vt_back[vt]) return 0;
+    vt_back[vt] = back;
+    g_term_gen++;
+    if (vt == CONSOLE_VT && term_mode == TERMINAL_MODE_FRAMEBUFFER) fb_redraw_all();
+    return 1;
+}
+
+/* the console, a page (or delta lines) back or forward: its limit is its scrollback */
+int terminal_vt_scroll_view(int vt, int delta) {
+    if (vt < 0 || vt >= VT_MAX) return 0;
+    return terminal_vt_set_view(vt, vt_back[vt] + delta, (int)vt_sb[vt].count + (vt == CONSOLE_VT ? 0 : (int)vt_row[vt]));
 }

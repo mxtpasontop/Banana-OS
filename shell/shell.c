@@ -2146,6 +2146,12 @@ static void shell_readline(char* buf, int maxlen, int persona) {
 
             if (gui_handle_arrow(c3)) continue;
 
+            if (c3 == 'I' || c3 == 'G') {               /* (Shift+) PgUp / PgDn: the scrollback, a page at a time */
+                int page = (int)terminal_get_height() - 1;
+                terminal_vt_scroll_view(my_vt, c3 == 'I' ? (page > 1 ? page : 1) : -(page > 1 ? page : 1));
+                continue;
+            }
+
             if (c3 == 'D' || c3 == 'C' || c3 == 'H' || c3 == 'F') {
                 if (c3 == 'D' && cur > 0) cur = u8_prev(buf, cur);
                 else if (c3 == 'C' && cur < len) cur = u8_next(buf, len, cur);
