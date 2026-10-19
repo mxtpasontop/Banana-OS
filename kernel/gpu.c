@@ -278,6 +278,36 @@ static int list_cb(const pci_dev_t* d, void* ctx) {
     return 0;
 }
 
+/* ── the display controllers, named (neofetch) ── */
+typedef struct { gpu_name_t* out; int max, n; } names_ctx_t;
+
+static int names_cb(const pci_dev_t* d, void* ctx) {
+    names_ctx_t* c = (names_ctx_t*)ctx;
+    if (d->class_code != 0x03 || c->n >= c->max) return 0;
+    gpu_t* g = NULL;
+    for (int i = 0; i < g_ngpus; i++)
+        if (g_gpus[i]->pci.bus == d->bus && g_gpus[i]->pci.dev == d->dev && g_gpus[i]->pci.fn == d->fn) g = g_gpus[i];
+    gpu_name_t* o = &c->out[c->n++];
+    const char* vn = vendor_name(d->vendor);
+    const char* fam = gpu_family_name(d->vendor, d->device);
+    if (g) kstrlcpy(o->name, g->name, sizeof(o->name));
+    else if (fam) kstrlcpy(o->name, fam, sizeof(o->name));
+    else ksnprintf(o->name, sizeof(o->name), "%s%sdisplay controller (%04x:%04x)", vn, vn[0] ? " " : "", d->vendor, d->device);
+    o->driver = g ? g->driver : NULL;
+    o->active = g && g == g_active;
+    o->vram = g ? g->vram : 0;
+    return 0;
+}
+
+int gpu_names(gpu_name_t* out, int max) {
+    names_ctx_t c = { out, max, 0 };
+    pci_scan(names_cb, &c);
+    /* the one the screen shows first */
+    for (int i = 1; i < c.n; i++)
+        if (out[i].active) { gpu_name_t t = out[0]; out[0] = out[i]; out[i] = t; break; }
+    return c.n;
+}
+
 void gpu_list(void) {
     pci_scan(list_cb, NULL);
     if (!fb_available()) terminal_writeln("(no framebuffer: text mode)");

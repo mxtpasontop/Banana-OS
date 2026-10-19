@@ -378,6 +378,18 @@ static void t_tlb(void) {
 #endif
 }
 
+/* ── neofetch's GPU lines: the real controllers, the active one named ── */
+static void t_gpu_names(void) {
+    gpu_name_t gn[4];
+    int n = gpu_names(gn, 4);
+    gpu_t* g = gpu_active();
+    char note[120];
+    if (!n) { skip("neofetch names the GPU", "no display controller on the PCI bus"); return; }
+    int ok = !g || (gn[0].active && !strcmp(gn[0].name, g->name));
+    ksnprintf(note, sizeof(note), "%s%s%s%s", gn[0].name, gn[0].driver ? " (" : "", gn[0].driver ? gn[0].driver : "", gn[0].driver ? ")" : "");
+    report("neofetch names the GPU the screen shows, first", ok, note);
+}
+
 /* ── UTF-8 everywhere: terminal cells, drawing, VGA, FAT names ── */
 static void t_utf8(void) {
     section("UTF-8: any character in the terminal, the editor and file names");
@@ -1025,7 +1037,7 @@ int selftest_cmd(int argc, char** argv) {
         section("VirGL contexts and host resources"); gpu_virgl_tests(report);
         if (gpu_virgl_available()) t_gl3("virgl");
     } else if(only && !strcmp(only,"gpu")) {
-        section("GPU presentation and diagnostics");gpu_tests(report);
+        section("GPU presentation and diagnostics");gpu_tests(report);t_gpu_names();
     } else if(only && !strcmp(only,"sleep")) {
         t_sleep(argc==3);
     } else if(only && !strcmp(only,"ram")) {
@@ -1086,6 +1098,7 @@ int selftest_cmd(int argc, char** argv) {
             t_opencl();
             browser_test_run(report);
             gpu_tests(report);
+            t_gpu_names();
             mouse_capture_tests(report);
             mouse_source_tests(report);
             bootmenu_tests_run(report);

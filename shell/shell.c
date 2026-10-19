@@ -462,10 +462,28 @@ static void cmd_neofetch(int persona) {
     } else {
         terminal_writeln("Unknown");
     }
+    /* the graphics: each display controller by name, then what the screen shows */
+    gpu_name_t gn[4];
+    int ng = gpu_names(gn, 4);
+    for (int i = 0; i < ng; i++) {
+        char d[160];
+        int o = ksnprintf(d, sizeof(d), "%s", gn[i].name);
+        if (gn[i].vram) o += ksnprintf(d + o, sizeof(d) - (size_t)o, ", %u MiB", gn[i].vram >> 20);
+        if (gn[i].driver && strcmp(gn[i].driver, "firmware")) ksnprintf(d + o, sizeof(d) - (size_t)o, " (%s driver)", gn[i].driver);
+        else ksnprintf(d + o, sizeof(d) - (size_t)o, gn[i].active || (ng == 1 && fb_available()) ? " (no driver: the firmware's screen)" : " (no driver)");
+        terminal_write_color(i == 0 ? "  GPU:      " : "            ", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        terminal_writeln(d);
+    }
+    if (!ng) {
+        terminal_write_color("  GPU:      ", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        terminal_writeln(fb_available() ? "none on the PCI bus (the firmware's framebuffer)" : "none found");
+    }
     terminal_write_color("  DISPLAY:  ", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     if (fb_available()) {
-        char d[48];
-        ksnprintf(d, sizeof(d), "framebuffer %ux%u, %u bpp", fb_info()->width, fb_info()->height, (uint32_t)fb_info()->bpp);
+        char d[96];
+        gpu_t* g = gpu_active();
+        ksnprintf(d, sizeof(d), "%ux%u, %u-bit%s%s%s", fb_info()->width, fb_info()->height, (uint32_t)fb_info()->bpp,
+                  g ? " (" : ", the firmware's framebuffer", g ? (strcmp(g->driver, "firmware") ? g->driver : "firmware framebuffer") : "", g ? ")" : "");
         terminal_writeln(d);
     } else {
         terminal_writeln("VGA text 80x25");

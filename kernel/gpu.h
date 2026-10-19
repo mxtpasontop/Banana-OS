@@ -101,6 +101,15 @@ void gpu_register_service(gpu_t* g, void (*service)(void),
 void gpu_driver_tests(void (*report)(const char*, int, const char*));
 
 void   gpu_list(void);                  /* lsgpu */
+/* the display controllers on the PCI bus, named as lsgpu names them (the
+ * one the screen shows first): how many, up to max */
+typedef struct {
+    char        name[80];
+    const char* driver;                 /* NULL: no driver (the firmware's framebuffer, or unused) */
+    int         active;                 /* the screen shows it */
+    uint32_t    vram;                   /* bytes, 0: unknown */
+} gpu_name_t;
+int    gpu_names(gpu_name_t* out, int max);
 /* after gpu_init: a card with no driver here (AMD, NVIDIA, Intel Arc / Xe)
  * keeps the firmware's screen - named, its framebuffer write-combining */
 void   gpu_firmware_init(void);
