@@ -64,7 +64,8 @@ selftest terminal        the terminal's scrollback: lines that scroll off a 5-ro
                          terminal are kept, oldest to newest; the view scrolls back
                          and new output brings it back down; ANSI escape codes:
                          colours (16, bold, 256, 24-bit, reverse), cursor placing,
-                         clearing, deleting characters, the title, hiding the cursor
+                         clearing, deleting characters, the title, hiding the cursor;
+                         Tab completion (a command, a folder, ~, a file, a choice of two)
 selftest opencl          installs and runs the cltest example: build errors in the
                          log, vadd, a 2D Mandelbrot range, atomics, math built-ins,
                          __local arguments, barrier(), local arrays, float4 / int /

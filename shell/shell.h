@@ -22,4 +22,7 @@ void shell_run_remote(int tty);
 void shell_power(int restart);
 void shell_sleep(void);
 
+/* (selftest) line as Tab completes it at its end: 1 if it changed */
+int shell_complete(const char* line, char* out, int cap);
+
 #endif

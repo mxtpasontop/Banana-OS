@@ -2080,6 +2080,137 @@ static void line_serial_echo(const char* buf, int len, int cur, int persona) {
     }
 }
 
+/* ── Tab completion ─────────────────────────────────────────────────
+ * The word before the cursor: the first one is a command (built in, or
+ * in a $PATH folder: /bin, /apps...), the others - and any with a '/' -
+ * a path. One match is put in whole (a space after it, or a '/' after a
+ * folder); several, what they share; Tab again lists them. */
+#define TC_MAX 512
+typedef struct { char name[FS_NAME_LEN]; int dir; } tc_cand_t;
+
+static void tc_add(tc_cand_t* c, int* n, const char* name, int dir, const char* prefix) {
+    int pl = (int)strlen(prefix);
+    if (*n >= TC_MAX || strncmp(name, prefix, (size_t)pl) != 0) return;
+    if (!pl && name[0] == '.') return;                  /* (hidden files only when asked for) */
+    for (int i = 0; i < *n; i++) if (!strcmp(c[i].name, name)) return;
+    kstrlcpy(c[*n].name, name, sizeof(c[*n].name));
+    c[*n].dir = dir;
+    (*n)++;
+}
+
+/* the entries of folder dir starting with prefix (dirs_only: folders only) */
+static void tc_folder(tc_cand_t* c, int* n, const char* dir, const char* prefix, int files) {
+    static int idx[1024];
+    int k = fs_list_dirs(dir, idx, 1024);
+    for (int i = 0; i < k && i < 1024; i++) { const fs_dir_t* d = fs_get_dir(idx[i]); if (d) tc_add(c, n, d->name, 1, prefix); }
+    if (!files) return;
+    k = fs_list_files(dir, idx, 1024);
+    for (int i = 0; i < k && i < 1024; i++) { fs_file_t* f = fs_file_info(idx[i]); if (f) tc_add(c, n, f->name, 0, prefix); }
+}
+
+static void tc_sort(tc_cand_t* c, int n) {          /* (insertion sort: a few hundred at most) */
+    static tc_cand_t t;
+    for (int i = 1; i < n; i++) {
+        t = c[i];
+        int j = i - 1;
+        while (j >= 0 && strcmp(c[j].name, t.name) > 0) { c[j + 1] = c[j]; j--; }
+        c[j + 1] = t;
+    }
+}
+
+/* completes the word before cur in buf; list: show the choices when there
+ * are several and nothing more to put in. 1: buf changed, 2: the choices
+ * were listed (the prompt has to come again), 0: nothing */
+static int tab_complete(char* buf, int* len, int* cur, int maxlen, int list) {
+    int ws = *cur;
+    while (ws > 0 && buf[ws - 1] != ' ') ws--;
+    int first = 1;
+    for (int i = 0; i < ws; i++) if (buf[i] != ' ') first = 0;
+    char word[FS_PATH_LEN];
+    int wl = *cur - ws;
+    if (wl >= (int)sizeof(word)) return 0;
+    memcpy(word, buf + ws, (size_t)wl);
+    word[wl] = 0;
+    tc_cand_t* c = (tc_cand_t*)kmalloc(sizeof(tc_cand_t) * TC_MAX);
+    if (!c) return 0;
+    int n = 0;
+    const char* slash = strrchr(word, '/');
+    const char* prefix = slash ? slash + 1 : word;
+    if (first && !slash) {
+        for (int i = 0; known_cmds[i]; i++) tc_add(c, &n, known_cmds[i], 0, word);
+        /* the programs in $PATH's folders (and /apps' apps) */
+        const char* p = path_value();
+        while (*p) {
+            char d[FS_PATH_LEN];
+            int k = 0;
+            while (*p && *p != ':' && k < (int)sizeof(d) - 1) d[k++] = *p++;
+            d[k] = 0;
+            if (*p == ':') p++;
+            if (!k) continue;
+            static int idx[1024];
+            int m = fs_list_files(d, idx, 1024);
+            for (int i = 0; i < m && i < 1024; i++) { fs_file_t* f = fs_file_info(idx[i]); if (f) tc_add(c, &n, f->name, 0, word); }
+            m = fs_list_dirs(d, idx, 1024);                 /* (/apps: one folder an app) */
+            for (int i = 0; i < m && i < 1024; i++) { const fs_dir_t* f = fs_get_dir(idx[i]); if (f) tc_add(c, &n, f->name, 0, word); }
+        }
+    } else {
+        char dir[FS_PATH_LEN];
+        if (!slash) fs_cwd_path(dir, sizeof(dir));
+        else if (slash == word) kstrlcpy(dir, "/", sizeof(dir));
+        else { int dl = (int)(slash - word); memcpy(dir, word, (size_t)dl); dir[dl] = 0; }
+        tc_folder(c, &n, dir, prefix, 1);
+    }
+    int rc = 0;
+    if (n > 0) {
+        /* what every choice shares beyond what is typed */
+        int pl = (int)strlen(prefix), common = (int)strlen(c[0].name);
+        for (int i = 1; i < n; i++) {
+            int k = 0;
+            while (k < common && c[i].name[k] == c[0].name[k]) k++;
+            common = k;
+        }
+        char add[FS_NAME_LEN + 2];
+        int al = common - pl;
+        if (al > 0) memcpy(add, c[0].name + pl, (size_t)al);
+        if (al < 0) al = 0;
+        if (n == 1) add[al++] = c[0].dir ? '/' : ' ';
+        add[al] = 0;
+        if (al > 0 && *len + al < maxlen) {
+            for (int i = *len; i >= *cur; i--) buf[i + al] = buf[i];
+            memcpy(buf + *cur, add, (size_t)al);
+            *len += al;
+            *cur += al;
+            buf[*len] = 0;
+            rc = 1;
+        } else if (n > 1 && list) {
+            /* the choices, in columns */
+            tc_sort(c, n);
+            int widest = 0;
+            for (int i = 0; i < n; i++) { int l = u8_cols(c[i].name, (int)strlen(c[i].name)) + c[i].dir; if (l > widest) widest = l; }
+            int cols = (int)terminal_get_width() / (widest + 2);
+            if (cols < 1) cols = 1;
+            terminal_putchar('\n');
+            for (int i = 0; i < n; i++) {
+                if (c[i].dir) { terminal_write_color(c[i].name, VGA_COLOR_LIGHT_BLUE, VGA_COLOR_BLACK); terminal_putchar('/'); }
+                else terminal_write(c[i].name);
+                int l = u8_cols(c[i].name, (int)strlen(c[i].name)) + c[i].dir;
+                if ((i + 1) % cols == 0 || i == n - 1) terminal_putchar('\n');
+                else for (int k = l; k < widest + 2; k++) terminal_putchar(' ');
+            }
+            rc = 2;
+        }
+    }
+    kfree(c);
+    return rc;
+}
+
+/* (selftest) line completed as Tab would at its end, into out */
+int shell_complete(const char* line, char* out, int cap) {
+    kstrlcpy(out, line, (size_t)cap);
+    int len = (int)strlen(out), cur = len;
+    return tab_complete(out, &len, &cur, cap, 0);
+}
+
 static void shell_readline(char* buf, int maxlen, int persona) {
     if (maxlen <= 0) return;
     buf[0] = '\0'; /* always start from clean command buffer */
@@ -2095,6 +2226,7 @@ static void shell_readline(char* buf, int maxlen, int persona) {
     int cur = 0;
     int prev_len = 0;
     int hist_nav = sh_hist_count; /* one-past-last means "live line" */
+    int tabbed = 0;               /* the last key was a Tab that put nothing in */
     char live_line[SH_LINE_MAX];
     live_line[0] = '\0';
 
@@ -2220,6 +2352,7 @@ static void shell_readline(char* buf, int maxlen, int persona) {
             buf[len] = '\0'; /* ensure empty Enter stays empty */
             line_place_cursor(start, u8_cols(buf, len));   /* newline after the whole (wrapped) line */
             terminal_putchar('\n');
+            while (len > 0 && buf[len - 1] == ' ') buf[--len] = '\0';   /* (blanks at the end mean nothing - Tab leaves one) */
             break;
         } else if (c == '\b') {
             if (cur > 0) {
@@ -2227,6 +2360,18 @@ static void shell_readline(char* buf, int maxlen, int persona) {
                 for (int i = pv; i + d <= len; i++) buf[i] = buf[i + d];
                 cur = pv;
                 len -= d;
+            }
+        } else if (c == '\t') {                         /* Tab: complete the word (twice: list the choices) */
+            int r = tab_complete(buf, &len, &cur, maxlen, tabbed);
+            tabbed = r == 0;
+            if (r == 0) continue;
+            if (r == 2) {                                /* (listed: the prompt and the line again) */
+                print_prompt(persona);
+                size_t pr, pc;
+                terminal_get_cursor(&pr, &pc);
+                start = (int)(pr * terminal_get_width() + pc);
+                prev_len = 0;
+                tabbed = 0;
             }
         } else if ((unsigned char)c >= 32 && len < maxlen - 1) {
             for (int i = len; i > cur; i--) buf[i] = buf[i - 1];
@@ -2236,6 +2381,7 @@ static void shell_readline(char* buf, int maxlen, int persona) {
         } else {
             continue;
         }
+        if (c != '\t') tabbed = 0;
 
         buf[len] = '\0';
 

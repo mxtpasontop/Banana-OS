@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "selftest.h"
+#include "shell.h"
 #include "../kernel/gpu.h"
 #include "../kernel/gpu_virgl.h"
 #include "../kernel/disk.h"
@@ -459,6 +460,22 @@ static void t_terminal(void) {
     #undef TCOL
     terminal_vt_clear_history(vt);
     terminal_vt_free(vt);
+
+    /* ── Tab completion ── */
+    section("the terminal: Tab completion");
+    static const char* const tc[][2] = {
+        { "neof", "neofetch " }, { "ls /hom", "ls /home/" }, { "ls ~/Exam", "ls ~/Examples/" },
+        { "cat ~/Examples/hel", "cat ~/Examples/hello.bpk " }, { "fs", "fs" },
+    };
+    int bad = -1;
+    char got[160];
+    for (unsigned i = 0; i < sizeof(tc) / sizeof(tc[0]) && bad < 0; i++) {
+        shell_complete(tc[i][0], got, sizeof(got));
+        if (strcmp(got, tc[i][1])) bad = (int)i;
+    }
+    if (bad >= 0) ksnprintf(note, sizeof(note), "\"%s\" became \"%s\", not \"%s\"", tc[bad][0], got, tc[bad][1]);
+    else ksnprintf(note, sizeof(note), "a command, a folder, ~, a file; \"fs\" (fsck, fstest) left as it is");
+    report("Tab completes commands and paths", bad < 0, note);
 }
 
 /* ── neofetch's GPU lines: the real controllers, the active one named ── */
