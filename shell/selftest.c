@@ -418,6 +418,45 @@ static void t_terminal(void) {
     terminal_vt_set_active(was);
     ksnprintf(note, sizeof(note), "10 lines back, then %d after new output", terminal_vt_view(vt));
     report("the view scrolls back, and new output brings it back", moved && at == 10 && terminal_vt_view(vt) == 0, note);
+
+    /* ── ANSI escape sequences ── */
+    section("the terminal: ANSI colours and cursor codes");
+    const uint32_t* ch;
+    const uint8_t* co;
+    int w, h, stride;
+    terminal_vt_get_buffer(vt, &ch, &co, &w, &h, &stride);
+    #define TCELL(r, c) ch[(r) * stride + (c)]
+    #define TCOL(r, c) co[(r) * stride + (c)]
+    terminal_vt_set_active(vt);
+    terminal_write("\x1b[2J\x1b[H\x1b[31mR\x1b[1;34mB\x1b[0mN\x1b[38;5;196mX\x1b[38;2;0;255;0mY\x1b[0;7mZ\x1b[0m");
+    terminal_vt_set_active(was);
+    int ok = TCELL(0, 0) == 'R' && TCOL(0, 0) == 0x04 && TCELL(0, 1) == 'B' && TCOL(0, 1) == 0x09 &&
+             TCELL(0, 2) == 'N' && TCOL(0, 2) == 0x07 && TCOL(0, 3) == 0x0C && TCOL(0, 4) == 0x0A && TCOL(0, 5) == 0x70;
+    ksnprintf(note, sizeof(note), "colours %02x %02x %02x %02x %02x %02x", TCOL(0, 0), TCOL(0, 1), TCOL(0, 2), TCOL(0, 3), TCOL(0, 4), TCOL(0, 5));
+    report("colours: 16, bold, 256, 24-bit, reverse", ok, note);
+    terminal_vt_set_active(vt);
+    terminal_write("\x1b[2J\x1b[3;5Hq\x1b[1;1Habcdef\x1b[1;3H\x1b[K\x1b[2;1Hxyz\x1b[2;2H\x1b[P");
+    terminal_vt_set_active(was);
+    char row0[32], row1[32];
+    cells_str(&TCELL(0, 0), w, row0, sizeof(row0));
+    cells_str(&TCELL(1, 0), w, row1, sizeof(row1));
+    ok = TCELL(2, 4) == 'q' && TCELL(2, 3) == ' ' && !strcmp(row0, "ab") && !strcmp(row1, "xz");
+    ksnprintf(note, sizeof(note), "row 1 \"%s\", row 2 \"%s\", (3,5) '%c'", row0, row1, (char)TCELL(2, 4));
+    report("cursor positioning, clearing the screen and a line, deleting a character", ok, note);
+    int esc_left = 0;
+    for (int r = 0; r < h; r++) for (int c = 0; c < w; c++) if (TCELL(r, c) == 0x1B) esc_left = 1;
+    terminal_vt_set_active(vt);
+    terminal_write("\x1b]0;My title\x07\x1b[?25l");
+    terminal_vt_set_active(was);
+    int hidden = !terminal_vt_cursor_shown(vt);
+    terminal_vt_set_active(vt);
+    terminal_write("\x1b[?25h");
+    terminal_vt_set_active(was);
+    ok = !strcmp(terminal_vt_title(vt), "My title") && hidden && terminal_vt_cursor_shown(vt) && !esc_left;
+    ksnprintf(note, sizeof(note), "title \"%s\", cursor hidden then shown%s", terminal_vt_title(vt), esc_left ? ", an ESC left on screen" : "");
+    report("the title, hiding the cursor, nothing of the codes on screen", ok, note);
+    #undef TCELL
+    #undef TCOL
     terminal_vt_clear_history(vt);
     terminal_vt_free(vt);
 }

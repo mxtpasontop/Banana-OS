@@ -108,5 +108,9 @@ void terminal_vt_clear_history(int vt);
 int  terminal_vt_view(int vt);
 int  terminal_vt_set_view(int vt, int back, int max);   /* 1 if it moved */
 int  terminal_vt_scroll_view(int vt, int delta);        /* + is back (up); 1 if it moved */
+/* set by programs with escape sequences: the title (ESC ] 0;title BEL, "" if
+ * none) and whether the cursor is shown (ESC [ ?25 l / h) */
+const char* terminal_vt_title(int vt);
+int  terminal_vt_cursor_shown(int vt);
 
 #endif

@@ -7,6 +7,7 @@
 #include "gfx.h"
 #include "serial.h"
 #include "tty.h"
+#include "keyboard.h"
 #include "kstring.h"
 #include "timer.h"
 #include "task.h"
@@ -224,7 +225,7 @@ static void fb_draw_cell(size_t row, size_t col) {
 
 static void fb_draw_cursor_overlay(size_t row, size_t col) {
     if (row >= terminal_fb_rows() || col >= terminal_fb_cols()) return;
-    if (vt_back[CONSOLE_VT]) { g_ov_valid = 0; return; }      /* (scrolled back: the cursor is below the view) */
+    if (vt_back[CONSOLE_VT] || !terminal_vt_cursor_shown(CONSOLE_VT)) { g_ov_valid = 0; return; }   /* (scrolled back, or a program hid it) */
     g_ov_valid = 1;
     g_ov_row = row;
     g_ov_col = col;
@@ -531,6 +532,304 @@ static void capture_putc(char c) {
     g_cap.buf[g_cap.len++] = c;
 }
 
+/* ── ANSI / VT100 escape sequences (the xterm subset programs use) ──────
+ * ESC [ ... m colours and attributes (16 colours, 256 and 24-bit ones to
+ * the nearest of them; bold as the bright colour, reverse video), cursor
+ * moves and positioning, erasing the screen / a line / the scrollback,
+ * inserting and deleting lines and characters, scrolling, saving the
+ * cursor, hiding it, reporting where it is; ESC ] 0 / 2 ; title BEL sets
+ * the window's title. The raw bytes still reach the serial port and SSH
+ * clients, which interpret them themselves. */
+enum { ES_TEXT, ES_ESC, ES_CSI, ES_OSC, ES_OSC_ESC };
+#define ES_PARAMS 16
+static uint8_t  es_state[VT_MAX];
+static uint8_t  es_priv[VT_MAX];                   /* '?' after ESC [ */
+static uint8_t  es_np[VT_MAX];
+static uint16_t es_p[VT_MAX][ES_PARAMS];
+static uint8_t  es_bold[VT_MAX], es_rev[VT_MAX];
+static uint8_t  es_fg[VT_MAX] = {7, 7, 7, 7, 7, 7, 7}, es_bg[VT_MAX];
+static size_t   es_save_r[VT_MAX], es_save_c[VT_MAX];
+static uint8_t  es_cursor_off[VT_MAX];
+static char     es_osc[VT_MAX][80];
+static uint8_t  es_osc_n[VT_MAX];
+static char     vt_title[VT_MAX][64];
+
+/* ANSI's colour order (black red green yellow blue magenta cyan white) in VGA's */
+static const uint8_t ANSI_VGA[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
+
+static uint32_t vga_color_rgb(uint8_t c);
+
+/* the 16 colours as xterm defines them, in VGA's order: what 256-colour and
+ * 24-bit ones are matched against (pure red is bright red there) */
+static const uint32_t XTERM16[16] = {
+    0x000000, 0x0000EE, 0x00CD00, 0x00CDCD, 0xCD0000, 0xCD00CD, 0xCDCD00, 0xE5E5E5,
+    0x7F7F7F, 0x5C5CFF, 0x00FF00, 0x00FFFF, 0xFF0000, 0xFF00FF, 0xFFFF00, 0xFFFFFF,
+};
+
+/* the nearest of the 16 colours to an RGB one */
+static uint8_t nearest16(int r, int g, int b) {
+    int best = 0, bd = 1 << 30;
+    for (int i = 0; i < 16; i++) {
+        uint32_t p = XTERM16[i];
+        int dr = (int)((p >> 16) & 0xFF) - r, dg = (int)((p >> 8) & 0xFF) - g, db = (int)(p & 0xFF) - b;
+        int d = dr * dr * 3 + dg * dg * 4 + db * db * 2;
+        if (d < bd) { bd = d; best = i; }
+    }
+    return (uint8_t)best;
+}
+
+/* xterm's 256 colours: the 16, a 6x6x6 cube, 24 greys */
+static uint8_t color256(int n) {
+    if (n < 8) return ANSI_VGA[n];
+    if (n < 16) return (uint8_t)(ANSI_VGA[n - 8] | 8);
+    if (n < 232) {
+        static const int lv[6] = { 0, 95, 135, 175, 215, 255 };
+        n -= 16;
+        return nearest16(lv[n / 36], lv[(n / 6) % 6], lv[n % 6]);
+    }
+    int g = 8 + (n - 232) * 10;
+    return nearest16(g, g, g);
+}
+
+static void es_apply_color(int v) {
+    uint8_t fg = es_fg[v], bg = es_bg[v];
+    if (es_bold[v] && fg < 8) fg |= 8;
+    if (es_rev[v]) { uint8_t t = fg; fg = bg; bg = t; }
+    term_color = (uint8_t)(fg | bg << 4);
+    vt_color[v] = term_color;
+}
+
+static void es_sgr(int v) {
+    /* (the colours as they are now: the shell sets them its own way too) */
+    if (!es_rev[v]) { es_fg[v] = vt_color[v] & 0x0F; es_bg[v] = vt_color[v] >> 4; if (es_bold[v]) es_fg[v] &= 7; }
+    if (es_np[v] == 0) es_np[v] = 1, es_p[v][0] = 0;
+    for (int i = 0; i < es_np[v]; i++) {
+        int p = es_p[v][i];
+        if (p == 0) { es_bold[v] = es_rev[v] = 0; es_fg[v] = 7; es_bg[v] = 0; }
+        else if (p == 1) es_bold[v] = 1;
+        else if (p == 22) es_bold[v] = 0;
+        else if (p == 7) es_rev[v] = 1;
+        else if (p == 27) es_rev[v] = 0;
+        else if (p >= 30 && p <= 37) es_fg[v] = ANSI_VGA[p - 30];
+        else if (p == 39) es_fg[v] = 7;
+        else if (p >= 40 && p <= 47) es_bg[v] = ANSI_VGA[p - 40];
+        else if (p == 49) es_bg[v] = 0;
+        else if (p >= 90 && p <= 97) es_fg[v] = (uint8_t)(ANSI_VGA[p - 90] | 8);
+        else if (p >= 100 && p <= 107) es_bg[v] = (uint8_t)(ANSI_VGA[p - 100] | 8);
+        else if ((p == 38 || p == 48) && i + 2 < es_np[v] && es_p[v][i + 1] == 5) {
+            uint8_t c = color256(es_p[v][i + 2]);
+            if (p == 38) es_fg[v] = c; else es_bg[v] = c;
+            i += 2;
+        } else if ((p == 38 || p == 48) && i + 4 < es_np[v] && es_p[v][i + 1] == 2) {
+            uint8_t c = nearest16(es_p[v][i + 2], es_p[v][i + 3], es_p[v][i + 4]);
+            if (p == 38) es_fg[v] = c; else es_bg[v] = c;
+            i += 4;
+        }
+    }
+    es_apply_color(v);
+}
+
+/* the text grid of the active vt: the framebuffer's (or a window's), or VGA text mode's */
+static int es_grid(void) {
+    return (term_mode == TERMINAL_MODE_FRAMEBUFFER && gfx_available()) || term_mode == TERMINAL_MODE_SUSPENDED;
+}
+
+static void es_cell_set(size_t r, size_t c, uint32_t cp, uint8_t color) {
+    if (es_grid()) {
+        if (r >= FB_MAX_ROWS || c >= FB_MAX_COLS) return;
+        vt_chars[vt_active][r][c] = cp;
+        vt_colors[vt_active][r][c] = color;
+        if (vt_active == CONSOLE_VT) mark_dirty(r);
+    } else {
+        if (r >= VGA_HEIGHT || c >= VGA_WIDTH) return;
+        term_buf[r * VGA_WIDTH + c] = vga_entry(vga_glyph(cp), color);
+    }
+}
+
+/* the cell at (rs, cs) copied to (rd, cd), as it is */
+static void es_cell_copy(size_t rd, size_t cd, size_t rs, size_t cs) {
+    if (es_grid()) {
+        if (rd >= FB_MAX_ROWS || cd >= FB_MAX_COLS || rs >= FB_MAX_ROWS || cs >= FB_MAX_COLS) return;
+        vt_chars[vt_active][rd][cd] = vt_chars[vt_active][rs][cs];
+        vt_colors[vt_active][rd][cd] = vt_colors[vt_active][rs][cs];
+        if (vt_active == CONSOLE_VT) mark_dirty(rd);
+    } else {
+        if (rd >= VGA_HEIGHT || cd >= VGA_WIDTH || rs >= VGA_HEIGHT || cs >= VGA_WIDTH) return;
+        term_buf[rd * VGA_WIDTH + cd] = term_buf[rs * VGA_WIDTH + cs];     /* (VGA: its code page 437 byte as it is) */
+    }
+}
+
+static void maybe_flush_if_console(void) {
+    if (vt_active == CONSOLE_VT && term_mode == TERMINAL_MODE_FRAMEBUFFER && gfx_available()) maybe_flush();
+}
+
+static void es_cursor(long r, long c) {
+    size_t h = terminal_usable_height(), w = terminal_width();
+    if (!h || !w) return;
+    if (r < 0) r = 0;
+    if (c < 0) c = 0;
+    if ((size_t)r >= h) r = (long)h - 1;
+    if ((size_t)c >= w) c = (long)w - 1;
+    term_row = (size_t)r;
+    term_col = (size_t)c;
+    vt_row[vt_active] = term_row;
+    vt_col[vt_active] = term_col;
+    if (!es_grid()) terminal_update_cursor();
+}
+
+static void es_erase(size_t r, size_t c0, size_t c1) {          /* [c0, c1) of row r */
+    for (size_t c = c0; c < c1; c++) es_cell_set(r, c, ' ', term_color);
+}
+
+/* rows [top, h) moved down n (insert) or up n (delete), blanks coming in */
+static void es_shift_rows(size_t top, int n, int down) {
+    size_t h = terminal_usable_height(), w = terminal_width();
+    if (top >= h || n <= 0) return;
+    if ((size_t)n > h - top) n = (int)(h - top);
+    if (down) {
+        for (size_t r = h - 1; r >= top + (size_t)n; r--)
+            for (size_t c = 0; c < w; c++) es_cell_copy(r, c, r - (size_t)n, c);
+        for (size_t r = top; r < top + (size_t)n; r++) es_erase(r, 0, w);
+    } else {
+        for (size_t r = top; r + (size_t)n < h; r++)
+            for (size_t c = 0; c < w; c++) es_cell_copy(r, c, r + (size_t)n, c);
+        for (size_t r = h - (size_t)n; r < h; r++) es_erase(r, 0, w);
+    }
+}
+
+/* characters of the cursor's row from col moved right n (insert) or left n (delete) */
+static void es_shift_cols(int n, int right) {
+    size_t w = terminal_width(), r = term_row, c0 = term_col;
+    if (n <= 0 || c0 >= w) return;
+    if ((size_t)n > w - c0) n = (int)(w - c0);
+    if (right) {
+        for (size_t c = w - 1; c >= c0 + (size_t)n; c--) es_cell_copy(r, c, r, c - (size_t)n);
+        es_erase(r, c0, c0 + (size_t)n);
+    } else {
+        for (size_t c = c0; c + (size_t)n < w; c++) es_cell_copy(r, c, r, c + (size_t)n);
+        es_erase(r, w - (size_t)n, w);
+    }
+}
+
+/* an answer to the program (where the cursor is): its input, as typed */
+static void es_reply(const char* s) {
+    for (int t = 0; t < TTY_MAX; t++)
+        if (tty_in_use(t) && tty_vt(t) == (int)vt_active) { tty_input(t, (const uint8_t*)s, (uint32_t)strlen(s)); return; }
+    keyboard_inject(s);
+}
+
+static void es_csi(int v, char f) {
+    int n = es_np[v] ? es_p[v][0] : 0, n1 = n ? n : 1;
+    size_t h = terminal_usable_height(), w = terminal_width();
+    long r = (long)term_row, c = (long)term_col;
+    if (es_priv[v]) {                                    /* ESC [ ? ... */
+        if ((f == 'h' || f == 'l') && n == 25) es_cursor_off[v] = f == 'l';
+        return;
+    }
+    switch (f) {
+    case 'm': es_sgr(v); break;
+    case 'A': es_cursor(r - n1, c); break;
+    case 'B': es_cursor(r + n1, c); break;
+    case 'C': es_cursor(r, c + n1); break;
+    case 'D': es_cursor(r, c - n1); break;
+    case 'E': es_cursor(r + n1, 0); break;
+    case 'F': es_cursor(r - n1, 0); break;
+    case 'G': case '`': es_cursor(r, n1 - 1); break;
+    case 'd': es_cursor(n1 - 1, c); break;
+    case 'H': case 'f': es_cursor((long)n1 - 1, (es_np[v] > 1 && es_p[v][1] ? es_p[v][1] : 1) - 1); break;
+    case 'J':
+        if (n == 3) { terminal_vt_clear_history(v); break; }
+        if (n == 0) { es_erase(term_row, term_col, w); for (size_t y = term_row + 1; y < h; y++) es_erase(y, 0, w); }
+        else if (n == 1) { for (size_t y = 0; y < term_row; y++) es_erase(y, 0, w); es_erase(term_row, 0, term_col + 1); }
+        else for (size_t y = 0; y < h; y++) es_erase(y, 0, w);
+        break;
+    case 'K':
+        if (n == 0) es_erase(term_row, term_col, w);
+        else if (n == 1) es_erase(term_row, 0, term_col + 1);
+        else es_erase(term_row, 0, w);
+        break;
+    case 'X': es_erase(term_row, term_col, term_col + (size_t)n1 < w ? term_col + (size_t)n1 : w); break;
+    case 'L': es_shift_rows(term_row, n1, 1); break;
+    case 'M': es_shift_rows(term_row, n1, 0); break;
+    case '@': es_shift_cols(n1, 1); break;
+    case 'P': es_shift_cols(n1, 0); break;
+    case 'S': es_shift_rows(0, n1, 0); break;
+    case 'T': es_shift_rows(0, n1, 1); break;
+    case 's': es_save_r[v] = term_row; es_save_c[v] = term_col; break;
+    case 'u': es_cursor((long)es_save_r[v], (long)es_save_c[v]); break;
+    case 'n':
+        if (n == 6) {
+            char b[24];
+            ksnprintf(b, sizeof(b), "\x1b[%u;%uR", (unsigned)term_row + 1, (unsigned)term_col + 1);
+            es_reply(b);
+        }
+        break;
+    default: break;                                      /* (others: ignored, not printed) */
+    }
+}
+
+/* c as part of an escape sequence: 1 if it was (nothing more to do with it) */
+static int es_feed(unsigned char c) {
+    int v = (int)vt_active;
+    switch (es_state[v]) {
+    case ES_TEXT:
+        if (c != 0x1B) return 0;
+        es_state[v] = ES_ESC;
+        return 1;
+    case ES_ESC:
+        es_state[v] = ES_TEXT;
+        if (c == '[') { es_state[v] = ES_CSI; es_np[v] = 0; es_priv[v] = 0; memset(es_p[v], 0, sizeof(es_p[v])); }
+        else if (c == ']') { es_state[v] = ES_OSC; es_osc_n[v] = 0; }
+        else if (c == '7') { es_save_r[v] = term_row; es_save_c[v] = term_col; }
+        else if (c == '8') es_cursor((long)es_save_r[v], (long)es_save_c[v]);
+        else if (c == 'c') {                              /* reset */
+            es_bold[v] = es_rev[v] = 0; es_fg[v] = 7; es_bg[v] = 0; es_cursor_off[v] = 0;
+            es_apply_color(v);
+            size_t h = terminal_usable_height(), w = terminal_width();
+            for (size_t y = 0; y < h; y++) es_erase(y, 0, w);
+            es_cursor(0, 0);
+        } else if (c == 'M') {                            /* up a line, scrolling down at the top */
+            if (term_row == 0) es_shift_rows(0, 1, 1); else es_cursor((long)term_row - 1, (long)term_col);
+        }
+        return 1;
+    case ES_CSI:
+        if (c == '?' && es_np[v] == 0 && !es_p[v][0]) { es_priv[v] = 1; return 1; }
+        if (c >= '0' && c <= '9') {
+            if (es_np[v] == 0) es_np[v] = 1;
+            uint32_t x = es_p[v][es_np[v] - 1] * 10u + (c - '0');
+            es_p[v][es_np[v] - 1] = (uint16_t)(x > 9999 ? 9999 : x);
+            return 1;
+        }
+        if (c == ';') {
+            if (es_np[v] == 0) es_np[v] = 1;
+            if (es_np[v] < ES_PARAMS) es_np[v]++;
+            return 1;
+        }
+        if (c >= 0x40 && c <= 0x7E) { es_state[v] = ES_TEXT; es_csi(v, (char)c); return 1; }
+        if (c < 0x20 || c > 0x7E) es_state[v] = ES_TEXT;  /* (broken: dropped) */
+        return 1;
+    case ES_OSC: case ES_OSC_ESC:
+        if (c == 0x07 || (es_state[v] == ES_OSC_ESC && c == '\\')) {
+            es_state[v] = ES_TEXT;
+            es_osc[v][es_osc_n[v]] = 0;
+            if ((es_osc[v][0] == '0' || es_osc[v][0] == '2') && es_osc[v][1] == ';') {
+                kstrlcpy(vt_title[v], es_osc[v] + 2, sizeof(vt_title[v]));
+                g_term_gen++;
+            }
+            return 1;
+        }
+        if (c == 0x1B) { es_state[v] = ES_OSC_ESC; return 1; }
+        es_state[v] = ES_OSC;
+        if (es_osc_n[v] + 1u < sizeof(es_osc[v])) es_osc[v][es_osc_n[v]++] = (char)c;
+        return 1;
+    }
+    es_state[v] = ES_TEXT;
+    return 0;
+}
+
+const char* terminal_vt_title(int vt) { return vt >= 0 && vt < VT_MAX ? vt_title[vt] : ""; }
+int terminal_vt_cursor_shown(int vt) { return vt >= 0 && vt < VT_MAX ? !es_cursor_off[vt] : 1; }
+
 void terminal_putchar(char c) {
     if (capturing()) { capture_putc(c); return; }
     g_term_gen++;
@@ -538,6 +837,12 @@ void terminal_putchar(char c) {
     if (vt_active == 0 && g_serial_mirror) serial_putc(c);
     /* ...and an SSH session's vt to its client */
     if (g_serial_mirror && vt_active != 0) tty_mirror((int)vt_active, c);
+    if (es_feed((unsigned char)c)) { maybe_flush_if_console(); return; }   /* (ESC [ ...: handled, not shown) */
+    if (c == '\t') {                                    /* the cursor to the next tab stop (every 8 columns) */
+        es_cursor((long)term_row, (long)((term_col / 8 + 1) * 8));
+        maybe_flush_if_console();
+        return;
+    }
 
     /* text is UTF-8: é comes as two bytes, € as three, and each fills one cell */
     uint32_t cp = (unsigned char)c;

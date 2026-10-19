@@ -721,7 +721,7 @@ static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
 
     {
         int scr_row = (int)cr - base;                 /* (scrolled back: below the window) */
-        if (scr_row >= 0 && scr_row < max_rows && (int)cc < max_cols) {
+        if (scr_row >= 0 && scr_row < max_rows && (int)cc < max_cols && terminal_vt_cursor_shown(win->vt)) {
             int idx = (int)cr * stride + (int)cc;
             uint8_t color = cols[idx];
             uint8_t fg = color & 0x0F;
