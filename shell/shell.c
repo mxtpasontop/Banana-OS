@@ -2205,6 +2205,9 @@ static int tab_complete(char* buf, int* len, int* cur, int maxlen, int list) {
 }
 
 /* (selftest) line completed as Tab would at its end, into out */
+/* (selftest) runs one command line, as typed at a prompt */
+void shell_exec(const char* line) { dispatch(line, g_default_shell_kind); }
+
 int shell_complete(const char* line, char* out, int cap) {
     kstrlcpy(out, line, (size_t)cap);
     int len = (int)strlen(out), cur = len;
@@ -2766,15 +2769,51 @@ static void dispatch_cmd(const char* raw_line, int persona) {
 
     /* commands with arguments */
     if (k_strncmp(line, "echo ",  5) == 0) {
-        /* quotes group words, like a real shell: they are not printed */
+        /* quotes group words, like a real shell: they are not printed;
+         * -n: no newline at the end, -e: \n \t \a \e \033 \x1b... (bash's) */
         const char* s = k_skip_spaces(line + 5);
+        int esc = 0, nl = 1;
+        while (s[0] == '-' && (s[1] == 'e' || s[1] == 'n' || s[1] == 'E') && (s[2] == ' ' || !s[2] ||
+               ((s[2] == 'e' || s[2] == 'n') && (s[3] == ' ' || !s[3])))) {
+            for (s++; *s && *s != ' '; s++) { if (*s == 'e') esc = 1; else if (*s == 'E') esc = 0; else nl = 0; }
+            s = k_skip_spaces(s);
+        }
         char q = 0;
         for (; *s; s++) {
             if (q) { if (*s == q) { q = 0; continue; } }
             else if (*s == 0x22 || *s == 0x27) { q = *s; continue; }
+            if (esc && *s == '\\' && s[1]) {
+                char c = *++s;
+                int v = -1;
+                switch (c) {
+                case 'n': v = '\n'; break;
+                case 't': v = '\t'; break;
+                case 'r': v = '\r'; break;
+                case 'a': v = 7; break;
+                case 'b': v = 8; break;
+                case 'e': case 'E': v = 0x1B; break;
+                case '\\': v = '\\'; break;
+                case 'c': return;                             /* (nothing more, no newline) */
+                case '0': v = 0;                              /* \0NNN: octal */
+                    for (int k = 0; k < 3 && s[1] >= '0' && s[1] <= '7'; k++) v = v * 8 + (*++s - '0');
+                    break;
+                case 'x': v = 0;                              /* \xHH */
+                    for (int k = 0; k < 2; k++) {
+                        char h = s[1];
+                        int d = h >= '0' && h <= '9' ? h - '0' : h >= 'a' && h <= 'f' ? h - 'a' + 10 : h >= 'A' && h <= 'F' ? h - 'A' + 10 : -1;
+                        if (d < 0) break;
+                        v = v * 16 + d;
+                        s++;
+                    }
+                    break;
+                }
+                if (v >= 0) terminal_putchar((char)v);
+                else { terminal_putchar('\\'); terminal_putchar(c); }
+                continue;
+            }
             terminal_putchar(*s);
         }
-        terminal_putchar(0x0A);
+        if (nl) terminal_putchar(0x0A);
         return;
     }
     if (k_strncmp(line, "cd ",    3) == 0) { fs_cd(k_skip_spaces(line+3));            return; }

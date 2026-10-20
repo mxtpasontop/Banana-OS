@@ -24,5 +24,7 @@ void shell_sleep(void);
 
 /* (selftest) line as Tab completes it at its end: 1 if it changed */
 int shell_complete(const char* line, char* out, int cap);
+/* (selftest) runs one command line, as if typed at a prompt */
+void shell_exec(const char* line);
 
 #endif

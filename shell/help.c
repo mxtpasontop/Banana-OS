@@ -143,9 +143,10 @@ static const page_t PAGES[] = {
       "Prints the first N lines (10 by default).", "-n N|how many lines", "head -n 3 /etc/passwd", "tail, cat" },
     { "tail", "text", "tail [-n N] <file>", "the last lines of a file",
       "Prints the last N lines (10 by default).", "-n N|how many lines", "tail -n 20 /var/log/x", "head, cat" },
-    { "echo", "text", "echo <text>", "print text",
-      "Prints its arguments. $NAME is replaced by the variable's value; with > or >> the text goes into a file.",
-      NULL, "echo hello\necho $HOME\necho line >> notes.txt", "export" },
+    { "echo", "text", "echo [-n] [-e] <text>", "print text",
+      "Prints its arguments. $NAME is replaced by the variable's value; with > or >> the text goes into a file. "
+      "-n: no newline at the end. -e: escapes - \\n \\t \\a \\e (ESC, for colours and the window's title) \\0NNN \\xHH \\\\.",
+      NULL, "echo hello\necho $HOME\necho line >> notes.txt\necho -e \"\\e[32mgreen\\e[0m\"\necho -e \"\\e]0;My title\\a\"", "export" },
     /* ── disks ── */
     { "df", "disks", "df [-h|-k|-m] [-i]", "disk space",
       "The size, used and free space of / (the installed disk) and of every mounted volume. -i shows "

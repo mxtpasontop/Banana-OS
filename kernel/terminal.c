@@ -554,6 +554,16 @@ static char     es_osc[VT_MAX][80];
 static uint8_t  es_osc_n[VT_MAX];
 static char     vt_title[VT_MAX][64];
 
+/* a vt given out again: none of the last owner's codes, colours or title */
+static void es_reset(int vt) {
+    es_state[vt] = ES_TEXT;
+    es_priv[vt] = es_np[vt] = es_bold[vt] = es_rev[vt] = es_cursor_off[vt] = es_osc_n[vt] = 0;
+    es_fg[vt] = 7;
+    es_bg[vt] = 0;
+    vt_title[vt][0] = 0;
+    vt_u8_need[vt] = 0;
+}
+
 /* ANSI's colour order (black red green yellow blue magenta cyan white) in VGA's */
 static const uint8_t ANSI_VGA[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
 
@@ -1117,6 +1127,8 @@ int terminal_vt_alloc(void) {
     for (int i = 1; i < VT_MAX; i++) {
         if (!vt_used[i]) {
             vt_used[i] = 1;
+            es_reset(i);
+            terminal_vt_clear_history(i);
             vt_row[i] = 0;
             vt_col[i] = 0;
             vt_color[i] = vt_color[vt_active];

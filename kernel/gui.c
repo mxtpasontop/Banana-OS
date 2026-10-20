@@ -665,7 +665,14 @@ static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
     draw_bevel_box(w.x, w.y, w.w, w.h, frame, 0x004A5466u, 0x000E1116u);
     gfx_fill_rect(w.x + 2, w.y + 2, w.w - 4, w.h - 4, body);
     draw_bevel_box(w.x + 3, w.y + 3, w.w - 6, title_h - 1, title, title_hi, title_lo);
-    gfx_draw_text(w.x + 10, w.y + 7, "Terminal", active ? 0x00F2F7FFu : 0x00CED8E6u, title);
+    /* the title a program set (ESC ] 0 ; ... BEL), else "Terminal": cut with "..." before the buttons */
+    char name[96];
+    const char* set = terminal_vt_title(win->vt);
+    kstrlcpy(name, set[0] ? set : "Terminal", sizeof(name) - 3);
+    int fit = (w.w - 10 - 84) / 8, len = (int)strlen(name);
+    if (fit < 4) fit = 4;
+    if (u8_cols(name, len) > fit) memcpy(name + u8_byte_at(name, len, fit - 3), "...", 4);
+    gfx_draw_text(w.x + 10, w.y + 7, name, active ? 0x00F2F7FFu : 0x00CED8E6u, title);
 
     /* minimize, maximize / restore, close */
     win_draw_button_row(w.x + w.w, w.y + 4, 12, 1, w.maxed);
@@ -1127,7 +1134,9 @@ static void win_title(int h, char* out, int cap) {
     if (k == WK_TERM) {
         int n = 0;
         for (int j = 0; j <= i; j++) if (g_terms[j].open) n++;
-        ksnprintf(out, (size_t)cap, "Terminal %d", n);
+        const char* set = terminal_vt_title(g_terms[i].vt);
+        if (set[0]) kstrlcpy(out, set, (size_t)cap);
+        else ksnprintf(out, (size_t)cap, "Terminal %d", n);
     } else if (k == WK_APP) {
         kstrlcpy(out, g_apps[i].title, (size_t)cap);
     } else {

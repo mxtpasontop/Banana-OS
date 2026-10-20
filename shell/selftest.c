@@ -458,8 +458,24 @@ static void t_terminal(void) {
     report("the title, hiding the cursor, nothing of the codes on screen", ok, note);
     #undef TCELL
     #undef TCOL
-    terminal_vt_clear_history(vt);
+    terminal_vt_set_active(vt);
+    terminal_write("\x1b[31m");                     /* (a colour, lines kept: left for the next owner) */
+    for (int i = 0; i < 8; i++) terminal_write("more\n");
+    terminal_vt_set_active(was);
     terminal_vt_free(vt);
+    int again = terminal_vt_alloc();
+    ok = again != vt || (!terminal_vt_title(again)[0] && !terminal_vt_history(again) && terminal_vt_cursor_shown(again));
+    if (again == vt) {
+        terminal_vt_set_active(again);
+        terminal_write("n");
+        terminal_vt_set_active(was);
+        terminal_vt_get_buffer(again, &ch, &co, &w, &h, &stride);
+        ok = ok && co[0] == co[1];                /* (the colour of a blank cell: not the red) */
+    }
+    ksnprintf(note, sizeof(note), again == vt ? "vt %d again: title \"%s\", %d lines kept, colour %02x" : "another vt (%d)",
+              again, terminal_vt_title(again), terminal_vt_history(again), again == vt ? co[0] : 0);
+    report("a terminal given out again starts clean (title, scrollback, colours)", ok, note);
+    if (again >= 0) terminal_vt_free(again);
 
     /* ── Tab completion ── */
     section("the terminal: Tab completion");
@@ -476,6 +492,27 @@ static void t_terminal(void) {
     if (bad >= 0) ksnprintf(note, sizeof(note), "\"%s\" became \"%s\", not \"%s\"", tc[bad][0], got, tc[bad][1]);
     else ksnprintf(note, sizeof(note), "a command, a folder, ~, a file; \"fs\" (fsck, fstest) left as it is");
     report("Tab completes commands and paths", bad < 0, note);
+
+    /* echo -e: what programs' escape codes are tried with */
+    static const char* const ec[][2] = {
+        { "echo -e \"a\\tb\\e[31mc\\x41\\0102\\\\\"", "a\tb\x1b[31mcAB\\\n" },
+        { "echo -n plain", "plain" }, { "echo \"a\\nb\"", "a\\nb\n" }, { "echo -ne x\\cy", "x" },
+    };
+    bad = -1;
+    char eo[48] = "";
+    for (unsigned i = 0; i < sizeof(ec) / sizeof(ec[0]) && bad < 0; i++) {
+        if (!terminal_capture_start()) { bad = (int)i; break; }
+        shell_exec(ec[i][0]);
+        uint32_t n;
+        char* out = terminal_capture_stop(&n);
+        int same = out && n == strlen(ec[i][1]) && !memcmp(out, ec[i][1], n);
+        if (!same) { bad = (int)i; if (out) { if (n >= sizeof(eo)) n = sizeof(eo) - 1; memcpy(eo, out, n); eo[n] = 0; } }
+        kfree(out);
+    }
+    for (char* p = eo; *p; p++) if (*p == 0x1B) *p = '^'; else if ((unsigned char)*p < ' ') *p = '.';
+    if (bad >= 0) ksnprintf(note, sizeof(note), "%s: \"%s\"", ec[bad][0], eo);
+    else ksnprintf(note, sizeof(note), "-e: \\t \\e \\x41 \\0102 \\\\, -n, no -e: as typed, \\c");
+    report("echo -e and -n", bad < 0, note);
 
     /* ── Ctrl+Shift+C: a terminal window's selection copied ── */
     section("the terminal: copy and paste");
