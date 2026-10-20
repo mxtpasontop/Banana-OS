@@ -2343,6 +2343,15 @@ static void shell_readline(char* buf, int maxlen, int persona) {
                 buf[cur++] = ch;
                 len++;
             }
+        } else if (c == 3 && (keyboard_mods() & 1) && gui_term_copy(my_vt)) {
+            continue;                                    /* Ctrl+Shift+C: the window's selection copied */
+        } else if (c == 12) {                            /* Ctrl+L: a clear screen, the prompt and the line again */
+            terminal_clear();
+            print_prompt(persona);
+            size_t pr, pc;
+            terminal_get_cursor(&pr, &pc);
+            start = (int)(pr * terminal_get_width() + pc);
+            prev_len = 0;
         } else if (c == 3) { /* Ctrl+C: cancel line, do not execute history entry */
             buf[0] = '\0';
             line_place_cursor(start, u8_cols(buf, len));

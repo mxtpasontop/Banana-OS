@@ -26,6 +26,11 @@ int gui_handle_arrow(char esc_code);
  * Each per-window shell task must check this before consuming a
  * keystroke, so typing only ever reaches the window you're looking at. */
 int gui_focused_vt(void);
+/* Ctrl+Shift+C: the selection of vt's terminal window to the clipboard (0: none) */
+int gui_term_copy(int vt);
+/* (selftest) sets (on) or takes away the selection of vt's terminal window, in
+ * buffer rows (< 0: the scrollback); 0 if vt has no window */
+int gui_term_select(int vt, int on, int r0, int c0, int r1, int c1);
 
 /* Closes the GUI terminal window that owns `vt` (same as clicking its 'x'
  * button). Used by the shell's "exit" builtin. Returns 1 if a window was

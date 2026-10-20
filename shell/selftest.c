@@ -476,6 +476,31 @@ static void t_terminal(void) {
     if (bad >= 0) ksnprintf(note, sizeof(note), "\"%s\" became \"%s\", not \"%s\"", tc[bad][0], got, tc[bad][1]);
     else ksnprintf(note, sizeof(note), "a command, a folder, ~, a file; \"fs\" (fsck, fstest) left as it is");
     report("Tab completes commands and paths", bad < 0, note);
+
+    /* ── Ctrl+Shift+C: a terminal window's selection copied ── */
+    section("the terminal: copy and paste");
+    if (!gui_term_select(was, 0, 0, 0, 0, 0)) {
+        skip("Ctrl+Shift+C copies the selection", "not in a desktop terminal window (startx, then selftest terminal)");
+        return;
+    }
+    static char saved[4096];
+    uint32_t slen, glen;
+    const char* cur = clipboard_get(&slen);
+    int keep = slen < sizeof(saved);
+    uint32_t saved_len = slen;
+    if (keep) memcpy(saved, cur, slen);
+    terminal_write("  copy me: caf\xC3\xA9 \xF0\x9F\x8D\x8C\n");
+    size_t pr, pc;
+    terminal_get_cursor(&pr, &pc);
+    int none = gui_term_copy(was);                  /* (no selection: Ctrl+C stays Ctrl+C) */
+    gui_term_select(was, 1, (int)pr - 1, 2, (int)pr - 1, terminal_get_width() - 1);
+    int copied = gui_term_copy(was);
+    gui_term_select(was, 0, 0, 0, 0, 0);
+    const char* got2 = clipboard_get(&glen);
+    ok = !none && copied && !strcmp(got2, "copy me: caf\xC3\xA9 \xF0\x9F\x8D\x8C");
+    ksnprintf(note, sizeof(note), "\"%s\"%s", got2, none ? ", copied with nothing selected" : "");
+    report("Ctrl+Shift+C copies the selection, trailing blanks cut", ok, note);
+    if (keep) clipboard_set(saved, saved_len);
 }
 
 /* ── neofetch's GPU lines: the real controllers, the active one named ── */

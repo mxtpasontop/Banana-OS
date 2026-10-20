@@ -2243,6 +2243,26 @@ static int front_term(void) {
     return -1;
 }
 
+/* Ctrl+Shift+C in the terminal window of vt: its selection onto the
+ * clipboard; 0 if it has none (the shell then takes it as Ctrl+C) */
+int gui_term_copy(int vt) {
+    for (int i = 0; i < TERM_WIN_MAX; i++)
+        if (g_terms[i].open && g_terms[i].vt == vt && g_terms[i].sel) { term_copy_selection(&g_terms[i]); return 1; }
+    return 0;
+}
+
+/* (selftest) the selection of vt's terminal window set, or taken away (on 0): 0 if vt has no window */
+int gui_term_select(int vt, int on, int r0, int c0, int r1, int c1) {
+    for (int i = 0; i < TERM_WIN_MAX; i++) {
+        term_win_t* w = &g_terms[i];
+        if (!w->open || w->vt != vt) continue;
+        w->s_r0 = r0; w->s_c0 = c0; w->s_r1 = r1; w->s_c1 = c1;
+        w->sel = on;
+        return 1;
+    }
+    return 0;
+}
+
 /* Alt+F4: the window in front closes; with none, the Shut down menu opens */
 static void close_front_window(const fb_info_t* fi) {
     if (ctxmenu_is_open()) {                    /* a menu: it closes (the Start menu with its submenu) */
