@@ -68,6 +68,8 @@ selftest terminal        the terminal's scrollback: lines that scroll off a 5-ro
                          Tab completion (a command, a folder, ~, a file, a choice of two)
                          in a desktop terminal: Ctrl+Shift+C copies a selection
                          (UTF-8, trailing blanks cut), nothing selected: not copied
+                         and Ctrl+= / Ctrl+0: the window's own text size (fewer cells,
+                         then back to Settings' size and its old grid)
                          echo -e / -n (\t \e \x41 \0102 \\ \c; no -e: as typed);
                          a vt given out again: no title, scrollback or colour left
                          BEL: counted, the window flashing for 200 ms, nothing drawn

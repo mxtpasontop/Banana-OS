@@ -219,6 +219,7 @@ typedef struct {
     int snapped;                  /* in a half / quarter of the screen (sx.. restore it) */
     int px, py;                   /* where a drag started */
     int desk, top;                /* its virtual desktop; always on top */
+    int zoom;                     /* Ctrl+= / Ctrl+-: its text size + 1 (0: Settings > Fonts') */
 } term_win_t;
 
 /* shown: open, not minimized, on the desktop shown */
@@ -492,9 +493,20 @@ static void clamp_win(const fb_info_t* fi, term_win_t* w) {
 #define TERM_PAD 6
 
 /* the window's client area decides its shell's text grid */
+/* a window's text size made the one cells are measured and drawn in: the
+ * size before (zoom_pop() puts it back) */
+static int zoom_push(const term_win_t* w) {
+    int was = gfx_text_size();
+    if (w->zoom) gfx_set_text_size(w->zoom - 1);
+    return was;
+}
+static void zoom_pop(int was) { gfx_set_text_size(was); }
+static int term_cw(const term_win_t* w) { int z = zoom_push(w), r = gfx_cell_w(); zoom_pop(z); return r; }
+static int term_ch(const term_win_t* w) { int z = zoom_push(w), r = gfx_cell_h(); zoom_pop(z); return r; }
+
 static void term_apply_size(term_win_t* w) {
     if (!w->vt) return;
-    terminal_vt_set_size(w->vt, (w->w - TERM_PAD * 2) / gfx_cell_w(), (w->h - TERM_TITLE_H - TERM_PAD * 2) / gfx_cell_h());
+    terminal_vt_set_size(w->vt, (w->w - TERM_PAD * 2) / term_cw(w), (w->h - TERM_TITLE_H - TERM_PAD * 2) / term_ch(w));
 }
 
 /* first buffer row shown (the view follows the cursor) */
@@ -534,7 +546,7 @@ static int term_scroll_by(term_win_t* w, int delta) {
     const uint8_t* cols;
     int tw, th, stride;
     terminal_vt_get_buffer(w->vt, &chars, &cols, &tw, &th, &stride);
-    int max_rows = (w->h - TERM_TITLE_H - TERM_PAD * 2) / gfx_cell_h();
+    int max_rows = (w->h - TERM_TITLE_H - TERM_PAD * 2) / term_ch(w);
     if (max_rows > th) max_rows = th;
     int max = terminal_vt_history(w->vt) + term_row_off(w, max_rows, th);
     return terminal_vt_set_view(w->vt, terminal_vt_view(w->vt) + delta, max);
@@ -546,10 +558,10 @@ static void term_cell_at(const term_win_t* w, int mx, int my, int* r, int* c) {
     const uint8_t* cols;
     int tw, th, stride;
     terminal_vt_get_buffer(w->vt, &chars, &cols, &tw, &th, &stride);
-    int max_cols = (w->w - TERM_PAD * 2) / gfx_cell_w(), max_rows = (w->h - TERM_TITLE_H - TERM_PAD * 2) / gfx_cell_h();
+    int max_cols = (w->w - TERM_PAD * 2) / term_cw(w), max_rows = (w->h - TERM_TITLE_H - TERM_PAD * 2) / term_ch(w);
     if (max_cols > tw) max_cols = tw;
     if (max_rows > th) max_rows = th;
-    int x = (mx - (w->x + TERM_PAD)) / gfx_cell_w(), y = (my - (w->y + TERM_TITLE_H + TERM_PAD)) / gfx_cell_h();
+    int x = (mx - (w->x + TERM_PAD)) / term_cw(w), y = (my - (w->y + TERM_TITLE_H + TERM_PAD)) / term_ch(w);
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x >= max_cols) x = max_cols - 1;
@@ -635,6 +647,7 @@ static int open_new_terminal(void) {
         g_terms[i].minimized = 0;
         g_terms[i].dragging = 0;
         g_terms[i].sel = 0;
+        g_terms[i].zoom = 0;                     /* (Settings > Fonts' size) */
         term_apply_size(&g_terms[i]);
         bring_term_front(i);
         return i;
@@ -644,7 +657,7 @@ static int open_new_terminal(void) {
     return g_term_order[TERM_WIN_MAX - 1];
 }
 
-static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
+static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
     if (!win || !TERM_SHOWN(win)) return;
     if (!fi) return;
 
@@ -748,6 +761,14 @@ static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
             }
         }
     }
+}
+
+/* (in the window's own text size: Ctrl+= / Ctrl+-) */
+static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
+    if (!win) return;
+    int z = zoom_push(win);
+    draw_terminal_text(fi, win);
+    zoom_pop(z);
 }
 
 static void u32_to_2dig(uint32_t v, char out[2]) {
@@ -2272,6 +2293,29 @@ int gui_term_copy(int vt) {
     for (int i = 0; i < TERM_WIN_MAX; i++)
         if (g_terms[i].open && g_terms[i].vt == vt && g_terms[i].sel) { term_copy_selection(&g_terms[i]); return 1; }
     return 0;
+}
+
+/* Ctrl+= / Ctrl+- / Ctrl+0 in vt's terminal window: its text a size bigger
+ * (+1), smaller (-1) or back to Settings' (0); 0 if vt has no window */
+int gui_term_zoom(int vt, int delta) {
+    for (int i = 0; i < TERM_WIN_MAX; i++) {
+        term_win_t* w = &g_terms[i];
+        if (!w->open || w->vt != vt) continue;
+        int size = (w->zoom ? w->zoom - 1 : gfx_text_size()) + delta;
+        if (size < 0) size = 0;
+        if (size >= GFX_TEXT_SIZES) size = GFX_TEXT_SIZES - 1;
+        w->zoom = delta ? size + 1 : 0;
+        term_apply_size(w);
+        g_force_redraw = 1;
+        return 1;
+    }
+    return 0;
+}
+/* (selftest) the text size vt's window draws in (-1: no window) */
+int gui_term_text_size(int vt) {
+    for (int i = 0; i < TERM_WIN_MAX; i++)
+        if (g_terms[i].open && g_terms[i].vt == vt) return g_terms[i].zoom ? g_terms[i].zoom - 1 : gfx_text_size();
+    return -1;
 }
 
 /* (selftest) the selection of vt's terminal window set, or taken away (on 0): 0 if vt has no window */

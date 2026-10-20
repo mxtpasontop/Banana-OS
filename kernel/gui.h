@@ -31,6 +31,10 @@ int gui_term_copy(int vt);
 /* (selftest) sets (on) or takes away the selection of vt's terminal window, in
  * buffer rows (< 0: the scrollback); 0 if vt has no window */
 int gui_term_select(int vt, int on, int r0, int c0, int r1, int c1);
+/* Ctrl+= / Ctrl+- / Ctrl+0: vt's terminal window's text a size bigger (+1),
+ * smaller (-1), back to Settings > Fonts' (0); 0 if vt has no window */
+int gui_term_zoom(int vt, int delta);
+int gui_term_text_size(int vt);       /* (the size it draws in; -1: no window) */
 
 /* Closes the GUI terminal window that owns `vt` (same as clicking its 'x'
  * button). Used by the shell's "exit" builtin. Returns 1 if a window was

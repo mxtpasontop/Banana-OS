@@ -21,6 +21,7 @@
 #include "../kernel/mouse_capture.h"
 #include "../kernel/usb.h"
 #include "../kernel/gui.h"
+#include "../kernel/gfx.h"
 #include "../kernel/browser_test.h"
 #include "ipv6test.h"
 #include "../net/ipv6.h"
@@ -565,6 +566,24 @@ static void t_terminal(void) {
     ksnprintf(note, sizeof(note), "\"%s\"%s", got2, none ? ", copied with nothing selected" : "");
     report("Ctrl+Shift+C copies the selection, trailing blanks cut", ok, note);
     if (keep) clipboard_set(saved, saved_len);
+
+    /* Ctrl+= / Ctrl+- / Ctrl+0: the window's own text size */
+    const uint32_t* zc;
+    const uint8_t* zo;
+    int w0, h0, zw, zh, zs;
+    terminal_vt_get_buffer(was, &zc, &zo, &w0, &h0, &zs);
+    int s0 = gui_term_text_size(was);
+    gui_term_zoom(was, s0 == GFX_TEXT_SIZES - 1 ? -1 : 1);       /* (one bigger; at the biggest, one smaller) */
+    int s1 = gui_term_text_size(was);
+    terminal_vt_get_buffer(was, &zc, &zo, &zw, &zh, &zs);
+    int fewer = s1 > s0 ? zw < w0 : zw > w0;
+    gui_term_zoom(was, 0);
+    int s2 = gui_term_text_size(was);
+    int w2, h2;
+    terminal_vt_get_buffer(was, &zc, &zo, &w2, &h2, &zs);
+    ok = s1 != s0 && fewer && s2 == gfx_text_size() && w2 == w0 && h2 == h0;
+    ksnprintf(note, sizeof(note), "size %d -> %d (%dx%d cells -> %dx%d), Ctrl+0: %d, %dx%d", s0, s1, w0, h0, zw, zh, s2, w2, h2);
+    report("Ctrl+= / Ctrl+- / Ctrl+0: the window's text size", ok, note);
 }
 
 /* ── neofetch's GPU lines: the real controllers, the active one named ── */

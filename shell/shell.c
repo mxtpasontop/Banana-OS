@@ -2241,12 +2241,25 @@ static void shell_readline(char* buf, int maxlen, int persona) {
         terminal_get_cursor(&r, &cc);
         start = (int)(r * terminal_get_width() + cc);
     }
+    size_t line_w = terminal_get_width();
 
     while (1) {
         poll_deferred_actions();
         daemon_poll(len == 0);
         gui_poll();
         terminal_vt_set_active(my_vt);
+
+        if (terminal_get_width() != line_w) {
+            /* the window resized or zoomed: the line found again from the cursor
+             * (its row and column stay), then drawn whole at the new width */
+            size_t r, cc;
+            line_w = terminal_get_width();
+            terminal_get_cursor(&r, &cc);
+            start = (int)(r * line_w + cc) - u8_cols(buf, cur);
+            if (start < 0) start = 0;
+            line_repaint(&start, buf, len, prev_len, cur);
+            prev_len = u8_cols(buf, len);
+        }
 
         if (gui_focused_vt() != my_vt) {
             /* Another window (or none) has keyboard focus: keep this
@@ -2258,6 +2271,11 @@ static void shell_readline(char* buf, int maxlen, int persona) {
 
         char c = keyboard_try_getchar();
         if (!c) { task_sleep_ms(10); continue; }
+
+        /* Ctrl+= / Ctrl+- / Ctrl+0: the window's text bigger, smaller, as in Settings */
+        if ((c == '=' || c == '+' || c == '-' || c == '_' || c == '0') && (keyboard_mods() & 2) &&
+            gui_term_zoom(my_vt, c == '0' ? 0 : c == '-' || c == '_' ? -1 : 1))
+            continue;
 
         if (c == 27) {
             /* Escape, or the lead byte of an arrow-key sequence
