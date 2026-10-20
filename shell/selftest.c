@@ -591,6 +591,22 @@ static void t_terminal(void) {
     ok = copied && !strcmp(got2, "keep me selected");
     ksnprintf(note, sizeof(note), "\"%s\" after %d lines more", got2, (int)terminal_get_height() + 3);
     report("a selection moves up with its text", ok, note);
+
+    /* tabs: a new one in front, back to this one, the new one closed (as its `exit` does) */
+    int tvts[4], tcur = -1;
+    int tn0 = gui_term_tabs(was, &tcur, tvts, 4);
+    int made = gui_term_tab_key(was, GUI_TAB_NEW);
+    int tn1 = gui_term_tabs(was, &tcur, tvts, 4), nvt = tn1 > tn0 ? tvts[tn1 - 1] : -1;
+    int focus_new = gui_focused_vt() == nvt, cur_new = tcur == tn1 - 1;
+    gui_term_tab_key(nvt, GUI_TAB_PREV);
+    gui_term_tabs(was, &tcur, tvts, 4);
+    int focus_back = gui_focused_vt() == was;
+    gui_close_terminal_by_vt(nvt);
+    int tn2 = gui_term_tabs(was, &tcur, tvts, 4);
+    ok = made && tn1 == tn0 + 1 && nvt > 0 && nvt != was && focus_new && cur_new && focus_back && tn2 == tn0 && gui_focused_vt() == was;
+    ksnprintf(note, sizeof(note), "%d tab(s), %d with the new one (vt %d, in front: %d), back: %d, closed: %d", tn0, tn1, nvt,
+              focus_new, focus_back, tn2);
+    report("tabs: a new one, Ctrl+Tab back, closing it", ok, note);
     if (keep) clipboard_set(saved, saved_len);
 
     /* Ctrl+= / Ctrl+- / Ctrl+0: the window's own text size */

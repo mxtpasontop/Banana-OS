@@ -8,7 +8,7 @@
  * terminal window (TERM_WIN_MAX in kernel/gui.c). Shared with modules
  * (e.g. shell/editor.c) that need one instance of some per-window state
  * per vt, so every window can run independently. */
-#define TERMINAL_VT_MAX 7   /* console + 4 GUI windows + 2 SSH sessions */
+#define TERMINAL_VT_MAX 16  /* console + the GUI windows and their tabs + 2 SSH sessions */
 
 /* VGA colors */
 enum vga_color {

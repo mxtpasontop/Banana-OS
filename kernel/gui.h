@@ -53,6 +53,15 @@ int  gui_term_link_at(int vt, int row, int col, char* out, int cap);
  * button). Used by the shell's "exit" builtin. Returns 1 if a window was
  * closed. */
 int gui_close_terminal_by_vt(int vt);
+/* tabs in a terminal window: Ctrl+Shift+T a new one, Ctrl+Shift+W closes
+ * the one shown (the last: the window), Ctrl+Tab / Ctrl+Shift+Tab the next /
+ * the one before; what the window showing vt does - 0 if nothing */
+enum { GUI_TAB_NEW = 1, GUI_TAB_CLOSE, GUI_TAB_NEXT, GUI_TAB_PREV };
+int gui_term_tab_key(int vt, int what);
+int gui_term_tabs(int vt, int* cur, int* vts, int max);  /* (selftest) its tabs: how many */
+/* 1 (once) if vt was given to a new tab after another closed it: its shell
+ * clears the screen and shows its prompt again */
+int gui_term_take_fresh(int vt);
 
 /* opens the Files window at `path` (NULL: home); 0 if the desktop is not running */
 int gui_open_files(const char* path);

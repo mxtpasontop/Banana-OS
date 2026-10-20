@@ -200,6 +200,8 @@ static int app_at(int mx, int my, int with_front) {
 }
 static uint32_t g_last_clock_sec = (uint32_t)-1;
 static int g_gui_enabled = 0; /* like startx: default off */
+#define TERM_TABS 4                      /* tabs in one terminal window */
+
 typedef struct {
     int open;
     int vt;   /* 0 until this slot's window has been opened for the first
@@ -222,6 +224,8 @@ typedef struct {
     int px, py;                   /* where a drag started */
     int desk, top;                /* its virtual desktop; always on top */
     int zoom;                     /* Ctrl+= / Ctrl+-: its text size + 1 (0: Settings > Fonts') */
+    int ntabs, tab;               /* its tabs (Ctrl+Shift+T), the one shown - vt is that one's */
+    int tab_vt[TERM_TABS];
     int finding;                  /* Ctrl+Shift+F: the find bar is open */
     char fq[64];                  /* ... what it looks for (UTF-8) */
     int f_found, f_row, f_col;    /* the match shown (buffer rows: < 0 the scrollback) */
@@ -246,13 +250,30 @@ static term_win_t g_terms[TERM_WIN_MAX] = {
  * used to be only one shell instance and focus just retargeted its
  * output). task_create() takes a plain 0-argument entry point, so these
  * four trampolines exist one-per-slot to close over each slot's index. */
-static void term_task_entry_0(void) { shell_run_window(g_terms[0].vt); }
-static void term_task_entry_1(void) { shell_run_window(g_terms[1].vt); }
-static void term_task_entry_2(void) { shell_run_window(g_terms[2].vt); }
-static void term_task_entry_3(void) { shell_run_window(g_terms[3].vt); }
-static void (*const g_term_task_entry[TERM_WIN_MAX])(void) = {
-    term_task_entry_0, term_task_entry_1, term_task_entry_2, term_task_entry_3
-};
+/* a terminal window's or tab's shell: a task of its own, started for a vt
+ * that waits for one (it takes the first such vt: tasks run in any order) */
+static uint8_t g_vt_wants_shell[TERMINAL_VT_MAX];
+static void term_shell_task(void) {
+    for (int v = 1; v < TERMINAL_VT_MAX; v++)
+        if (g_vt_wants_shell[v]) { g_vt_wants_shell[v] = 0; shell_run_window(v); }
+}
+/* a new vt with its shell (kept for good, like the windows'): the vt, -1 */
+static int term_spawn_shell(void) {
+    int vt = terminal_vt_alloc();
+    if (vt < 0) return -1;
+    g_vt_wants_shell[vt] = 1;
+    task_create("term-sh", term_shell_task);
+    return vt;
+}
+/* closed tabs: their vts, the shells still at a prompt - for the next tab */
+static int g_tab_pool[TERMINAL_VT_MAX], g_ntab_pool;
+static uint8_t g_vt_fresh[TERMINAL_VT_MAX];      /* a reused tab, to be cleared by its shell */
+int gui_term_take_fresh(int vt) {
+    if (vt <= 0 || vt >= TERMINAL_VT_MAX || !g_vt_fresh[vt]) return 0;
+    g_vt_fresh[vt] = 0;
+    return 1;
+}
+static uint32_t g_tb_gen;                       /* (the taskbar's buttons changed) */
 
 /* z-order: back -> front */
 static int g_term_order[TERM_WIN_MAX] = {0, 1, 2, 3};
@@ -489,6 +510,10 @@ static void clamp_win(const fb_info_t* fi, term_win_t* w) {
 #define GRIP 14                     /* the resize grip in a window's bottom-right corner */
 #define TERM_TITLE_H 20
 #define TERM_PAD 6
+#define TERM_TAB_H 18                    /* the tab strip (with two tabs or more) */
+
+/* where a window's text starts below its top edge: the title bar, the tabs */
+static int term_top(const term_win_t* w) { return TERM_TITLE_H + (w->ntabs > 1 ? TERM_TAB_H : 0); }
 
 /* the window's client area decides its shell's text grid */
 /* a window's text size made the one cells are measured and drawn in: the
@@ -504,7 +529,9 @@ static int term_ch(const term_win_t* w) { int z = zoom_push(w), r = gfx_cell_h()
 
 static void term_apply_size(term_win_t* w) {
     if (!w->vt) return;
-    terminal_vt_set_size(w->vt, (w->w - TERM_PAD * 2) / term_cw(w), (w->h - TERM_TITLE_H - TERM_PAD * 2) / term_ch(w));
+    int cols = (w->w - TERM_PAD * 2) / term_cw(w), rows = (w->h - term_top(w) - TERM_PAD * 2) / term_ch(w);
+    terminal_vt_set_size(w->vt, cols, rows);
+    for (int t = 0; t < w->ntabs; t++) terminal_vt_set_size(w->tab_vt[t], cols, rows);     /* (the tabs behind too) */
 }
 
 /* first buffer row shown (the view follows the cursor) */
@@ -544,7 +571,7 @@ static int term_scroll_by(term_win_t* w, int delta) {
     const uint8_t* cols;
     int tw, th, stride;
     terminal_vt_get_buffer(w->vt, &chars, &cols, &tw, &th, &stride);
-    int max_rows = (w->h - TERM_TITLE_H - TERM_PAD * 2) / term_ch(w);
+    int max_rows = (w->h - term_top(w) - TERM_PAD * 2) / term_ch(w);
     if (max_rows > th) max_rows = th;
     int max = terminal_vt_history(w->vt) + term_row_off(w, max_rows, th);
     return terminal_vt_set_view(w->vt, terminal_vt_view(w->vt) + delta, max);
@@ -556,10 +583,10 @@ static void term_cell_at(const term_win_t* w, int mx, int my, int* r, int* c) {
     const uint8_t* cols;
     int tw, th, stride;
     terminal_vt_get_buffer(w->vt, &chars, &cols, &tw, &th, &stride);
-    int max_cols = (w->w - TERM_PAD * 2) / term_cw(w), max_rows = (w->h - TERM_TITLE_H - TERM_PAD * 2) / term_ch(w);
+    int max_cols = (w->w - TERM_PAD * 2) / term_cw(w), max_rows = (w->h - term_top(w) - TERM_PAD * 2) / term_ch(w);
     if (max_cols > tw) max_cols = tw;
     if (max_rows > th) max_rows = th;
-    int x = (mx - (w->x + TERM_PAD)) / term_cw(w), y = (my - (w->y + TERM_TITLE_H + TERM_PAD)) / term_ch(w);
+    int x = (mx - (w->x + TERM_PAD)) / term_cw(w), y = (my - (w->y + term_top(w) + TERM_PAD)) / term_ch(w);
     if (x < 0) x = 0;
     if (y < 0) y = 0;
     if (x >= max_cols) x = max_cols - 1;
@@ -595,7 +622,7 @@ static int find_match_at(const term_win_t* w, const uint32_t* chars, const uint8
 
 /* the window's text rows (the window's grid, the cursor followed) */
 static int term_win_rows(const term_win_t* w, int th) {
-    int r = (w->h - TERM_TITLE_H - TERM_PAD * 2) / term_ch(w);
+    int r = (w->h - term_top(w) - TERM_PAD * 2) / term_ch(w);
     return r > th ? th : r;
 }
 
@@ -704,6 +731,89 @@ static int term_open_link(const term_win_t* w, int mx, int my) {
     return 1;
 }
 
+/* ── tabs: each its own vt and shell; w->vt is the one shown ── */
+static void term_show_tab(term_win_t* w, int t) {
+    if (t < 0 || t >= w->ntabs) return;
+    w->tab = t;
+    w->vt = w->tab_vt[t];
+    w->sel = w->selecting = 0;                          /* (a selection, a search: the last tab's) */
+    w->finding = 0;
+    g_tb_gen++;
+    g_force_redraw = 1;
+}
+
+/* a new tab, shown: 0 if there is no room (TERM_TABS, or no vt left) */
+static int term_new_tab(term_win_t* w) {
+    if (w->ntabs >= TERM_TABS) return 0;
+    int vt, reused = 0;
+    if (g_ntab_pool) { vt = g_tab_pool[--g_ntab_pool]; reused = 1; }
+    else if ((vt = term_spawn_shell()) < 0) return 0;
+    w->tab_vt[w->ntabs++] = vt;
+    term_show_tab(w, w->ntabs - 1);
+    term_apply_size(w);                                 /* (the strip may have just appeared) */
+    if (reused) {                                       /* a closed tab's shell: a clean screen, its prompt again */
+        terminal_vt_clear_history(vt);
+        g_vt_fresh[vt] = 1;                             /* (its shell clears it: gui_term_take_fresh) */
+    }
+    return 1;
+}
+
+/* tab t closed - its shell kept for a later tab; the last one closes the window */
+static void term_close_tab(term_win_t* w, int t) {
+    if (t < 0 || t >= w->ntabs) return;
+    if (w->ntabs == 1) { w->open = 0; g_tb_gen++; return; }
+    if (g_ntab_pool < TERMINAL_VT_MAX) g_tab_pool[g_ntab_pool++] = w->tab_vt[t];
+    for (int k = t; k + 1 < w->ntabs; k++) w->tab_vt[k] = w->tab_vt[k + 1];
+    w->ntabs--;
+    term_show_tab(w, w->tab > t || w->tab == w->ntabs ? w->tab - 1 : w->tab);
+    term_apply_size(w);
+}
+
+/* the tab strip: each tab's box (x, width), a tab's close box, the + */
+static int term_tab_w(const term_win_t* w) {
+    int tw = (w->w - 6 - 26) / (w->ntabs ? w->ntabs : 1);
+    return tw > 170 ? 170 : tw;
+}
+/* what (mx, my) is on the strip: the tab (0..), with *close set on its x; -2 the +; -1 nothing */
+static int term_tab_at(const term_win_t* w, int mx, int my, int* close) {
+    *close = 0;
+    if (w->ntabs < 2 || my < w->y + TERM_TITLE_H || my >= w->y + term_top(w)) return -1;
+    int tw = term_tab_w(w), x0 = w->x + 3;
+    if (mx >= x0 + w->ntabs * tw + 2 && mx < x0 + w->ntabs * tw + 24) return -2;
+    int t = (mx - x0) / tw;
+    if (mx < x0 || t >= w->ntabs) return -1;
+    *close = mx >= x0 + (t + 1) * tw - 18;
+    return t;
+}
+
+static void draw_term_tabs(const term_win_t* w) {
+    if (w->ntabs < 2) return;
+    int y = w->y + TERM_TITLE_H, tw = term_tab_w(w), x0 = w->x + 3;
+    gfx_fill_rect(w->x + 3, y, w->w - 6, TERM_TAB_H, 0x00181C22u);
+    for (int t = 0; t < w->ntabs; t++) {
+        int x = x0 + t * tw, cur = t == w->tab, vt = w->tab_vt[t];
+        uint32_t bg = terminal_vt_ringing(vt) ? 0x00B07A18u : cur ? 0x003C4B66u : 0x00262C36u;
+        draw_bevel_box(x, y + 1, tw - 2, TERM_TAB_H - 1, bg, cur ? 0x006B7892u : 0x00384050u, 0x00111824u);
+        char name[64];
+        const char* set = terminal_vt_title(vt);
+        if (set[0]) kstrlcpy(name, set, sizeof(name) - 3);
+        else ksnprintf(name, sizeof(name), "Terminal %d", t + 1);
+        int fit = (tw - 26) / 8, len = (int)strlen(name);
+        if (fit < 1) fit = 1;
+        if (u8_cols(name, len) > fit) {
+            if (fit > 3) memcpy(name + u8_byte_at(name, len, fit - 3), "...", 4);
+            else name[u8_byte_at(name, len, fit)] = 0;
+        }
+        gfx_draw_text(x + 6, y + 6, name, cur ? 0x00F2F7FFu : 0x00A8B4C8u, bg);
+        gfx_draw_text(x + tw - 14, y + 6, "x", cur ? 0x00F2F7FFu : 0x008A96AAu, bg);
+    }
+    int px = x0 + w->ntabs * tw + 2;
+    if (w->ntabs < TERM_TABS) {
+        draw_bevel_box(px, y + 1, 22, TERM_TAB_H - 1, 0x00262C36u, 0x00384050u, 0x00111824u);
+        gfx_draw_text(px + 7, y + 6, "+", 0x00F2F7FFu, 0x00262C36u);
+    }
+}
+
 static term_win_t* term_of_vt(int vt) {
     for (int i = 0; i < TERM_WIN_MAX; i++) if (g_terms[i].open && g_terms[i].vt == vt) return &g_terms[i];
     return NULL;
@@ -789,10 +899,12 @@ static int open_new_terminal(void) {
              * and start its shell task. Both are kept forever after this
              * (see the term_win_t.vt comment) - closing the window later
              * just hides it, it does not free the vt or stop the task. */
-            int vt = terminal_vt_alloc();
+            int vt = term_spawn_shell();
             if (vt < 0) continue; /* out of vts; maybe another slot is reusable */
             g_terms[i].vt = vt;
-            task_create("term-sh", g_term_task_entry[i]);
+            g_terms[i].ntabs = 1;
+            g_terms[i].tab = 0;
+            g_terms[i].tab_vt[0] = vt;
         }
 
         g_terms[i].open = 1;
@@ -853,9 +965,10 @@ static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
 
     /* client area */
     int cx = w.x + pad;
-    int cy = w.y + title_h + pad;
+    draw_term_tabs(win);
+    int cy = w.y + term_top(win) + pad;
     int cw = w.w - pad * 2;
-    int ch = w.h - title_h - pad * 2;
+    int ch = w.h - term_top(win) - pad * 2;
     gfx_fill_rect(cx, cy, cw, ch, vga_color_rgb(0));          /* (the scheme's background) */
 
     const uint32_t* chars;
@@ -1316,7 +1429,6 @@ static int cursor_shape(int mx, int my) {
 #define TB_MAX    24
 static int      g_tb[TB_MAX];
 static int      g_ntb;
-static uint32_t g_tb_gen;
 
 static int win_exists(int h) {
     int k = h >> 8, i = h & 0xFF;
@@ -1946,7 +2058,7 @@ static void draw_taskbar_fb(const fb_info_t* fi) {
 typedef struct {
     int menu_open, menu_sel;
     int term_open[TERM_WIN_MAX], term_x[TERM_WIN_MAX], term_y[TERM_WIN_MAX], term_order[TERM_WIN_MAX];
-    int term_w[TERM_WIN_MAX], term_h[TERM_WIN_MAX], term_sel[TERM_WIN_MAX], term_min[TERM_WIN_MAX], term_bell[TERM_WIN_MAX];
+    int term_w[TERM_WIN_MAX], term_h[TERM_WIN_MAX], term_sel[TERM_WIN_MAX], term_min[TERM_WIN_MAX], term_bell[TERM_WIN_MAX], term_tabs[TERM_WIN_MAX];
     int front_app, app_order[APP_COUNT], app_min[APP_COUNT];
     uint32_t sec, term_gen, wp_gen, net_state, app_sig[APP_COUNT], ctx_sig, tb_gen;
     uint32_t desk_sig, wm_sig;
@@ -1970,6 +2082,8 @@ static void capture_view(gui_view_t* v, uint32_t sec) {
         v->term_min[i] = g_terms[i].minimized;
         v->term_bell[i] = g_terms[i].open && terminal_vt_ringing(g_terms[i].vt);
         term_sel_follow(&g_terms[i]);
+        v->term_tabs[i] = g_terms[i].ntabs * 16 + g_terms[i].tab;
+        for (int t = 0; t < g_terms[i].ntabs; t++) if (terminal_vt_ringing(g_terms[i].tab_vt[t])) v->term_tabs[i] |= 0x100 << t;
         v->term_sel[i] = g_terms[i].sel ? g_terms[i].s_r0 * 7919 + g_terms[i].s_c0 * 31 + g_terms[i].s_r1 * 131 + g_terms[i].s_c1 + 1 : 0;
     }
     v->sec = sec;
@@ -3051,7 +3165,7 @@ static void open_taskbar_menu(const fb_info_t* fi, int mx, int my) {
 }
 
 /* a terminal window */
-enum { TM_COPY = 1, TM_PASTE, TM_CLEAR, TM_MINIMIZE, TM_CLOSE, TM_NEW, TM_COLORS, TM_SCHEME = 100 };
+enum { TM_COPY = 1, TM_PASTE, TM_CLEAR, TM_MINIMIZE, TM_CLOSE, TM_NEW, TM_COLORS, TM_NEWTAB, TM_SCHEME = 100 };
 static int g_tmenu_term, g_tmenu_x, g_tmenu_y;
 
 /* Colours...: the schemes, the one in use marked */
@@ -3086,6 +3200,7 @@ static void term_menu_cb(int id, void* arg) {
     case TM_CLOSE: w->open = 0; g_tb_gen++; break;
     case TM_NEW: do_action(ACT_TERMINAL); break;
     case TM_COLORS: open_term_colors_menu(); break;
+    case TM_NEWTAB: bring_term_front(g_tmenu_term); g_front_app = -1; term_new_tab(w); break;
     }
 }
 
@@ -3102,6 +3217,7 @@ static void open_term_menu(int wi, int mx, int my) {
         { "Colours...", TM_COLORS, 0 },
         { CTX_SEP, 0, 0 },
         { "New terminal", TM_NEW, 0 },
+        { "New tab", TM_NEWTAB, g_terms[wi].ntabs >= TERM_TABS },
         { "Minimize", TM_MINIMIZE, 0 },
         { "Close", TM_CLOSE, 0 },
     };
@@ -3510,6 +3626,11 @@ static void gui_poll_body(void) {
                         w->open = 0;
                     } else if (tbtn == WIN_BTN_MIN) {
                         win_minimize(WK_TERM << 8 | wi);
+                    } else if (my >= w->y + title_h && my < w->y + term_top(w)) {
+                        int on_x, t = term_tab_at(w, mx, my, &on_x);    /* the tab strip */
+                        if (t == -2) term_new_tab(w);
+                        else if (t >= 0 && on_x) term_close_tab(w, t);
+                        else if (t >= 0) term_show_tab(w, t);
                     } else if (my < w->y + title_h) {
                         uint32_t now = timer_ms();
                         if (tbtn == WIN_BTN_MAX || now - w->title_click_ms < 400) {   /* maximize / restore */
@@ -3751,9 +3872,33 @@ int gui_focused_vt(void) {
 
 int gui_close_terminal_by_vt(int vt) {
     for (int i = 0; i < TERM_WIN_MAX; i++) {
-        if (g_terms[i].open && g_terms[i].vt == vt) {
-            g_terms[i].open = 0;
-            return 1;
+        if (!g_terms[i].open) continue;
+        for (int t = 0; t < g_terms[i].ntabs; t++)
+            if (g_terms[i].tab_vt[t] == vt) { term_close_tab(&g_terms[i], t); return 1; }   /* (its tab; the last: the window) */
+    }
+    return 0;
+}
+
+/* Ctrl+Shift+T / Ctrl+Shift+W / Ctrl+Tab (Shift: back) in the window showing vt */
+int gui_term_tab_key(int vt, int what) {
+    term_win_t* w = term_of_vt(vt);
+    if (!w) return 0;
+    if (what == GUI_TAB_NEW) return term_new_tab(w);
+    if (what == GUI_TAB_CLOSE) { term_close_tab(w, w->tab); return 1; }
+    if (w->ntabs < 2) return 0;
+    term_show_tab(w, (w->tab + (what == GUI_TAB_NEXT ? 1 : w->ntabs - 1)) % w->ntabs);
+    return 1;
+}
+/* (selftest) vt's window's tabs: how many, the one shown in *cur, their vts */
+int gui_term_tabs(int vt, int* cur, int* vts, int max) {
+    for (int i = 0; i < TERM_WIN_MAX; i++) {
+        term_win_t* w = &g_terms[i];
+        if (!w->open) continue;
+        for (int t = 0; t < w->ntabs; t++) {
+            if (w->tab_vt[t] != vt) continue;
+            *cur = w->tab;
+            for (int k = 0; k < w->ntabs && k < max; k++) vts[k] = w->tab_vt[k];
+            return w->ntabs;
         }
     }
     return 0;
@@ -4180,7 +4325,7 @@ static int kb_global(int k) {
             explorer_menu_key();
         } else if (g_front_app < 0 && front_term() >= 0) {    /* a terminal window: its menu, near its corner */
             const term_win_t* t = &g_terms[front_term()];
-            open_term_menu(front_term(), t->x + 40, t->y + TERM_TITLE_H + 20);
+            open_term_menu(front_term(), t->x + 40, t->y + term_top(t) + 20);
         }
         if (ctxmenu_is_open()) ctxmenu_select_first();
         g_force_redraw = 1;

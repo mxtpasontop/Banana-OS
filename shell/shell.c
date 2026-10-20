@@ -2249,6 +2249,16 @@ static void shell_readline(char* buf, int maxlen, int persona) {
         gui_poll();
         terminal_vt_set_active(my_vt);
 
+        if (gui_term_take_fresh(my_vt)) {                /* a closed tab's shell in a new tab: as Ctrl+L */
+            terminal_clear();
+            print_prompt(persona);
+            size_t r, cc;
+            terminal_get_cursor(&r, &cc);
+            start = (int)(r * terminal_get_width() + cc);
+            prev_len = 0;
+            line_repaint(&start, buf, len, prev_len, cur);
+            prev_len = u8_cols(buf, len);
+        }
         if (terminal_get_width() != line_w) {
             /* the window resized or zoomed: the line found again from the cursor
              * (its row and column stay), then drawn whole at the new width */
@@ -2276,6 +2286,16 @@ static void shell_readline(char* buf, int maxlen, int persona) {
         if ((c == '=' || c == '+' || c == '-' || c == '_' || c == '0') && (keyboard_mods() & 2) &&
             gui_term_zoom(my_vt, c == '0' ? 0 : c == '-' || c == '_' ? -1 : 1))
             continue;
+
+        /* tabs: Ctrl+Shift+T a new one, Ctrl+Shift+W closes this one, Ctrl+Tab
+         * (Shift: back) to the next */
+        {
+            int m = keyboard_mods(), what = 0;
+            if (c == 20 && (m & 1)) what = GUI_TAB_NEW;
+            else if (c == 23 && (m & 1)) what = GUI_TAB_CLOSE;
+            else if (c == '\t' && (m & 2)) what = (m & 1) ? GUI_TAB_PREV : GUI_TAB_NEXT;
+            if (what && gui_term_tab_key(my_vt, what)) continue;
+        }
 
         /* Ctrl+Shift+F: find in the window's text and scrollback; while its bar
          * is open, the keys are its */
@@ -2316,6 +2336,9 @@ static void shell_readline(char* buf, int maxlen, int persona) {
 
             if (gui_handle_arrow(c3)) continue;
 
+            if ((c3 == 'I' || c3 == 'G') && (keyboard_mods() & 2) &&       /* Ctrl+PgUp / PgDn: the tab before / next */
+                gui_term_tab_key(my_vt, c3 == 'I' ? GUI_TAB_PREV : GUI_TAB_NEXT))
+                continue;
             if (c3 == 'I' || c3 == 'G') {               /* (Shift+) PgUp / PgDn: the scrollback, a page at a time */
                 int page = (int)terminal_get_height() - 1;
                 terminal_vt_scroll_view(my_vt, c3 == 'I' ? (page > 1 ? page : 1) : -(page > 1 ? page : 1));
