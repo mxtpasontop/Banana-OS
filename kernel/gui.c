@@ -640,6 +640,69 @@ found:
     terminal_vt_set_view(w->vt, back < 0 ? 0 : back > max ? max : back, max);
 }
 
+/* the web address at (r, c) of a window's text (http:// or https://, up to
+ * a blank; trailing punctuation left out): 1 and it in out (UTF-8) */
+static int term_link_at(const term_win_t* w, int r, int c, char* out, int cap) {
+    const uint32_t* chars;
+    const uint8_t* cols;
+    int tw, th, stride;
+    terminal_vt_get_buffer(w->vt, &chars, &cols, &tw, &th, &stride);
+    if (c < 0 || c >= tw || r >= th || r < -terminal_vt_history(w->vt)) return 0;
+    uint32_t cp[256];
+    for (int x = 0; x < tw && x < 256; x++) {
+        uint8_t co;
+        term_cell(w, chars, cols, stride, r, x, &cp[x], &co);
+        if (!cp[x]) cp[x] = ' ';
+    }
+    if (cp[c] == ' ') return 0;
+    int a = c, b = c;                                  /* the word around it */
+    while (a > 0 && cp[a - 1] != ' ') a--;
+    while (b + 1 < tw && cp[b + 1] != ' ') b++;
+    int start = -1;                                    /* the last scheme at or before the click */
+    for (int y = c; y >= a && start < 0; y--) {
+        static const char* const SCHEMES[] = { "https://", "http://" };
+        for (int k = 0; k < 2 && start < 0; k++) {
+            int n = (int)strlen(SCHEMES[k]), same = y + n <= b + 1;
+            for (int i = 0; same && i < n; i++) if (fold_cp(cp[y + i]) != (uint32_t)SCHEMES[k][i]) same = 0;
+            if (same) start = y;
+        }
+    }
+    if (start < 0) return 0;
+    while (b > start) {                                /* trailing punctuation left out */
+        uint32_t t = cp[b];
+        if (t == '.' || t == ',' || t == ';' || t == ':' || t == '!' || t == '?' || t == ']' || t == '}' || t == '>' ||
+            t == '\'' || t == '"') { b--; continue; }
+        if (t == ')') {                                /* (one closing a '(' of the address's own stays) */
+            int open = 0, close = 0;
+            for (int x = start; x <= b; x++) { open += cp[x] == '('; close += cp[x] == ')'; }
+            if (close > open) { b--; continue; }
+        }
+        break;
+    }
+    if (c > b) return 0;
+    int n = 0;
+    for (int x = start; x <= b; x++) {
+        char u[4];
+        int k = u8_encode(cp[x], u);
+        if (n + k >= cap) return 0;
+        memcpy(out + n, u, (size_t)k);
+        n += k;
+    }
+    out[n] = 0;
+    return n > 8;                                       /* (more than the scheme) */
+}
+
+/* Ctrl+click: the web address under the mouse opened in the Browser (1) */
+static int term_open_link(const term_win_t* w, int mx, int my) {
+    int r, c;
+    char url[512];
+    term_cell_at(w, mx, my, &r, &c);
+    if (!term_link_at(w, r, c, url, sizeof(url))) return 0;
+    browser_open(url);
+    raise_app(APP_BROWSER);
+    return 1;
+}
+
 static term_win_t* term_of_vt(int vt) {
     for (int i = 0; i < TERM_WIN_MAX; i++) if (g_terms[i].open && g_terms[i].vt == vt) return &g_terms[i];
     return NULL;
@@ -2465,6 +2528,12 @@ void gui_term_find_key(int vt, int key) {
     g_force_redraw = 1;
 }
 
+/* (selftest) the web address Ctrl+click would open at (row, col) of vt's window */
+int gui_term_link_at(int vt, int row, int col, char* out, int cap) {
+    term_win_t* w = term_of_vt(vt);
+    return w && term_link_at(w, row, col, out, cap);
+}
+
 /* (selftest) the match shown: 1 and where, 0 none */
 int gui_term_find_match(int vt, int* row, int* col) {
     term_win_t* w = term_of_vt(vt);
@@ -3442,6 +3511,8 @@ static void gui_poll_body(void) {
                         w->drag_dx = w->x + w->w - mx;
                         w->drag_dy = w->y + w->h - my;
                         w->maxed = w->snapped = 0;
+                    } else if ((keyboard_mods() & 2) && term_open_link(w, mx, my)) {
+                        /* Ctrl+click on a web address: opened in the Browser */
                     } else {
                         /* start a text selection (a plain click clears it) */
                         w->selecting = 1;

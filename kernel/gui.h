@@ -45,6 +45,9 @@ int  gui_term_find_open(int vt);
 int  gui_term_finding(int vt);
 void gui_term_find_key(int vt, int key);
 int  gui_term_find_match(int vt, int* row, int* col);    /* (selftest) the match shown */
+/* Ctrl+click on a web address in a terminal window opens it in the Browser;
+ * (selftest) the address at (row, col) of vt's window: 1 and it in out */
+int  gui_term_link_at(int vt, int row, int col, char* out, int cap);
 
 /* Closes the GUI terminal window that owns `vt` (same as clicking its 'x'
  * button). Used by the shell's "exit" builtin. Returns 1 if a window was

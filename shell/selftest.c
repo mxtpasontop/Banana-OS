@@ -621,6 +621,19 @@ static void t_terminal(void) {
     ok = f1 && c1 == 4 && f2 && c2 == 2 && r2 < 0 && back > 0 && f3 && r3 == r2 && !gui_term_finding(was) && !terminal_vt_view(was);
     ksnprintf(note, sizeof(note), "newest at row %d col %d, older at %d col %d (view %d lines back), Esc", r1, c1, r2, c2, back);
     report("Ctrl+Shift+F finds in the text and the scrollback", ok, note);
+
+    /* Ctrl+click: the web address under the mouse */
+    terminal_write("  see (https://en.wikipedia.org/wiki/Banana_(fruit)),\n  or HTTP://example.com/a?b=1.\n");
+    size_t lr, lcol;
+    terminal_get_cursor(&lr, &lcol);
+    int row = (int)lr - 2;
+    char u1[96] = "", u2[96] = "", u3[96] = "";
+    int l1 = gui_term_link_at(was, row, 20, u1, sizeof(u1));      /* (inside the first) */
+    int l2 = gui_term_link_at(was, row + 1, 10, u2, sizeof(u2));  /* (the second) */
+    int l3 = gui_term_link_at(was, row, 3, u3, sizeof(u3));       /* ("see") */
+    ok = l1 && !strcmp(u1, "https://en.wikipedia.org/wiki/Banana_(fruit)") && l2 && !strcmp(u2, "HTTP://example.com/a?b=1") && !l3;
+    ksnprintf(note, sizeof(note), "\"%s\", \"%s\", none on a word: %d", u1, u2, !l3);
+    report("Ctrl+click opens the web address under the mouse", ok, note);
 }
 
 /* ── neofetch's GPU lines: the real controllers, the active one named ── */
