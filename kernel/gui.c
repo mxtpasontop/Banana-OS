@@ -216,6 +216,7 @@ typedef struct {
     uint32_t title_click_ms;      /* double-click on the title bar */
     int selecting, sel;           /* mouse text selection (cells, buffer rows) */
     int s_r0, s_c0, s_r1, s_c1;
+    uint32_t s_scrolled;          /* terminal_vt_lines_scrolled() when its rows were last right */
     int minimized;                /* to the taskbar */
     int snapped;                  /* in a half / quarter of the screen (sx.. restore it) */
     int px, py;                   /* where a drag started */
@@ -706,6 +707,21 @@ static int term_open_link(const term_win_t* w, int mx, int my) {
 static term_win_t* term_of_vt(int vt) {
     for (int i = 0; i < TERM_WIN_MAX; i++) if (g_terms[i].open && g_terms[i].vt == vt) return &g_terms[i];
     return NULL;
+}
+
+/* the selection moved up with its text by the lines output pushed off the
+ * top since; gone once its text has left the scrollback too */
+static void term_sel_follow(term_win_t* w) {
+    uint32_t now = terminal_vt_lines_scrolled(w->vt);
+    int d = (int)(now - w->s_scrolled);
+    w->s_scrolled = now;
+    if (!d) return;
+    w->s_r0 -= d;
+    w->s_r1 -= d;
+    int oldest = -terminal_vt_history(w->vt);
+    if (w->s_r0 < oldest && w->s_r1 < oldest) w->sel = w->selecting = 0;
+    if (w->s_r0 < oldest) { w->s_r0 = oldest; w->s_c0 = 0; }
+    if (w->s_r1 < oldest) { w->s_r1 = oldest; w->s_c1 = 0; }
 }
 
 static int term_cell_selected(const term_win_t* w, int r, int c) {
@@ -1953,6 +1969,7 @@ static void capture_view(gui_view_t* v, uint32_t sec) {
         v->term_h[i] = g_terms[i].h;
         v->term_min[i] = g_terms[i].minimized;
         v->term_bell[i] = g_terms[i].open && terminal_vt_ringing(g_terms[i].vt);
+        term_sel_follow(&g_terms[i]);
         v->term_sel[i] = g_terms[i].sel ? g_terms[i].s_r0 * 7919 + g_terms[i].s_c0 * 31 + g_terms[i].s_r1 * 131 + g_terms[i].s_c1 + 1 : 0;
     }
     v->sec = sec;
@@ -2458,7 +2475,7 @@ static int front_term(void) {
  * clipboard; 0 if it has none (the shell then takes it as Ctrl+C) */
 int gui_term_copy(int vt) {
     for (int i = 0; i < TERM_WIN_MAX; i++)
-        if (g_terms[i].open && g_terms[i].vt == vt && g_terms[i].sel) { term_copy_selection(&g_terms[i]); return 1; }
+        if (g_terms[i].open && g_terms[i].vt == vt && (term_sel_follow(&g_terms[i]), g_terms[i].sel)) { term_copy_selection(&g_terms[i]); return 1; }
     return 0;
 }
 
@@ -2549,6 +2566,7 @@ int gui_term_select(int vt, int on, int r0, int c0, int r1, int c1) {
         term_win_t* w = &g_terms[i];
         if (!w->open || w->vt != vt) continue;
         w->s_r0 = r0; w->s_c0 = c0; w->s_r1 = r1; w->s_c1 = c1;
+        w->s_scrolled = terminal_vt_lines_scrolled(vt);
         w->sel = on;
         return 1;
     }
@@ -3061,7 +3079,7 @@ static void term_menu_cb(int id, void* arg) {
     term_win_t* w = &g_terms[g_tmenu_term];
     if (!w->open) return;
     switch (id) {
-    case TM_COPY: if (w->sel) term_copy_selection(w); break;
+    case TM_COPY: term_sel_follow(w); if (w->sel) term_copy_selection(w); break;
     case TM_PASTE: bring_term_front(g_tmenu_term); g_front_app = -1; keyboard_inject("\x16"); break;
     case TM_CLEAR: bring_term_front(g_tmenu_term); g_front_app = -1; keyboard_inject("clear\n"); break;
     case TM_MINIMIZE: win_minimize(WK_TERM << 8 | g_tmenu_term); break;
@@ -3517,6 +3535,7 @@ static void gui_poll_body(void) {
                         /* start a text selection (a plain click clears it) */
                         w->selecting = 1;
                         w->sel = 0;
+                        w->s_scrolled = terminal_vt_lines_scrolled(w->vt);
                         term_cell_at(w, mx, my, &w->s_r0, &w->s_c0);
                         w->s_r1 = w->s_r0;
                         w->s_c1 = w->s_c0;
@@ -3601,6 +3620,7 @@ static void gui_poll_body(void) {
             if (left && t->selecting) {
                 int r, c;
                 term_cell_at(t, mx, my, &r, &c);
+                term_sel_follow(t);
                 if (r != t->s_r1 || c != t->s_c1) { t->s_r1 = r; t->s_c1 = c; t->sel = 1; }
             }
             if (!left) {

@@ -102,6 +102,9 @@ char terminal_cp437(uint32_t cp);
 /* Scrollback: the lines that scrolled off a vt's top (2000 kept), and its
  * view - lines back from the live text (new output brings it back) */
 int  terminal_vt_history(int vt);                 /* how many lines */
+/* how many lines have left the top of vt's screen, ever (text that was at
+ * row r is now at r minus the change: what keeps a selection on its text) */
+uint32_t terminal_vt_lines_scrolled(int vt);
 /* the line `back` lines up (1: the newest); NULLs if there is none */
 void terminal_vt_history_line(int vt, int back, const uint32_t** chars, const uint8_t** colors);
 void terminal_vt_clear_history(int vt);

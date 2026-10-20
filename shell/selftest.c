@@ -580,6 +580,17 @@ static void t_terminal(void) {
     ok = !none && copied && !strcmp(got2, "copy me: caf\xC3\xA9 \xF0\x9F\x8D\x8C");
     ksnprintf(note, sizeof(note), "\"%s\"%s", got2, none ? ", copied with nothing selected" : "");
     report("Ctrl+Shift+C copies the selection, trailing blanks cut", ok, note);
+    /* the selection keeps to its text when output pushes it up (into the scrollback) */
+    terminal_write("  keep me selected\n");
+    terminal_get_cursor(&pr, &pc);
+    gui_term_select(was, 1, (int)pr - 1, 2, (int)pr - 1, terminal_get_width() - 1);
+    for (int i = 0; i < terminal_get_height() + 3; i++) terminal_write("  ..\n");
+    copied = gui_term_copy(was);
+    gui_term_select(was, 0, 0, 0, 0, 0);
+    got2 = clipboard_get(&glen);
+    ok = copied && !strcmp(got2, "keep me selected");
+    ksnprintf(note, sizeof(note), "\"%s\" after %d lines more", got2, (int)terminal_get_height() + 3);
+    report("a selection moves up with its text", ok, note);
     if (keep) clipboard_set(saved, saved_len);
 
     /* Ctrl+= / Ctrl+- / Ctrl+0: the window's own text size */

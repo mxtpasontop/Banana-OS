@@ -58,8 +58,11 @@ static scrollback_t vt_sb[VT_MAX];
 static int          vt_back[VT_MAX];
 static uint8_t      vt_cshape[VT_MAX];        /* the cursor's shape: TERM_CURSOR_* (ESC [ n SP q) */
 
+static uint32_t vt_pushed[VT_MAX];                  /* lines that left the top, ever: what moved the text up */
+
 static void sb_push(int vt, const uint32_t* ch, const uint8_t* co, size_t w) {
     scrollback_t* s = &vt_sb[vt];
+    vt_pushed[vt]++;
     if (!s->ch) {
         s->ch = (uint32_t*)kmalloc(SB_LINES * FB_MAX_COLS * sizeof(uint32_t));
         s->co = (uint8_t*)kmalloc(SB_LINES * FB_MAX_COLS);
@@ -85,6 +88,8 @@ void terminal_vt_history_line(int vt, int back, const uint32_t** ch, const uint8
     *ch = vt_sb[vt].ch + i * FB_MAX_COLS;
     *co = vt_sb[vt].co + i * FB_MAX_COLS;
 }
+
+uint32_t terminal_vt_lines_scrolled(int vt) { return vt >= 0 && vt < VT_MAX ? vt_pushed[vt] : 0; }
 
 void terminal_vt_clear_history(int vt) {
     if (vt < 0 || vt >= VT_MAX) return;
