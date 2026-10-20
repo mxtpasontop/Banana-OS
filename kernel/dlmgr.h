@@ -40,6 +40,8 @@ void dlm_remove(int id);          /* from the list (the file stays) */
 void dlm_clear(void);             /* every finished one off the list */
 /* how many run now, and their bytes so far / in all (0 when not known) */
 int  dlm_running(uint32_t* got, uint32_t* total);
+/* the first id of this start's downloads (the list's older ones are below) */
+int  dlm_session_base(void);
 /* changes whenever what the list shows changes */
 uint32_t dlm_gen(void);
 

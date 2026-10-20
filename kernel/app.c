@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "app.h"
+#include "i18n.h"
 #include "gpu_virgl.h"
 #include "appwin.h"
 #include "audio.h"
@@ -912,6 +913,7 @@ static void a_localtime(banana_time_t* t) {
 
 static unsigned int a_time_utc(void) { return rtc_now_utc(); }
 static int a_utc_offset(unsigned int utc) { return tz_offset_at(tz_current(), utc ? utc : rtc_now_utc()); }
+static int a_language(char* out, int cap) { if (!out || cap < 3) return -1; kstrlcpy(out, i18n_lang(), (size_t)cap); return 0; }
 
 static unsigned int a_random(void) { return random_u32(); }
 
@@ -1864,6 +1866,7 @@ static void spec_init(void) {
     SPEC(win_mouse_captured, "i", 0);
     SPEC(time_utc, "", 0);
     SPEC(utc_offset, "i", 0);
+    SPEC(language, "bi", 0);
     SPEC(pkg_install, "sbi", 0);
     SPEC(app_run, "siibi", 0);          /* argv: checked in it */
     SPEC(repo_update, "bi", 0);
@@ -2397,6 +2400,7 @@ static void api_init(void) {
     g_api.win_mouse_captured = G(a_win_mouse_captured);
     g_api.time_utc = G(a_time_utc);
     g_api.utc_offset = G(a_utc_offset);
+    g_api.language = G(a_language);
     g_api.pkg_install = G(a_pkg_install);
     g_api.app_run = G(a_app_run);
     g_api.repo_update = G(a_repo_update);

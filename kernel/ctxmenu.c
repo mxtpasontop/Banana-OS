@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ctxmenu.h"
+#include "theme.h"
 #include "gfx.h"
 #include "fb.h"
 #include "kstring.h"
@@ -99,21 +100,21 @@ void ctxmenu_hover(int mx, int my) {
 void ctxmenu_draw(void) {
     if (!g_open) return;
     /* a shadow, then a bevelled panel */
-    gfx_fill_rect(g_x + 4, g_y + 4, g_w, g_h, 0x00080A0Eu);
-    gfx_fill_rect(g_x, g_y, g_w, g_h, 0x00232A35u);
-    gfx_fill_rect(g_x, g_y, g_w, 1, 0x00627089u);
-    gfx_fill_rect(g_x, g_y, 1, g_h, 0x00627089u);
-    gfx_fill_rect(g_x, g_y + g_h - 1, g_w, 1, 0x000E1117u);
-    gfx_fill_rect(g_x + g_w - 1, g_y, 1, g_h, 0x000E1117u);
+    gfx_fill_rect(g_x + 4, g_y + 4, g_w, g_h, TC(0x080A0E));
+    gfx_fill_rect(g_x, g_y, g_w, g_h, TC(0x232A35));
+    gfx_fill_rect(g_x, g_y, g_w, 1, TC(0x627089));
+    gfx_fill_rect(g_x, g_y, 1, g_h, TC(0x627089));
+    gfx_fill_rect(g_x, g_y + g_h - 1, g_w, 1, TC(0x0E1117));
+    gfx_fill_rect(g_x + g_w - 1, g_y, 1, g_h, TC(0x0E1117));
     for (int i = 0; i < g_n; i++) {
         int y = item_y(i);
         if (is_sep(i)) {
-            gfx_fill_rect(g_x + 8, y + 3, g_w - 16, 1, 0x00475266u);
+            gfx_fill_rect(g_x + 8, y + 3, g_w - 16, 1, TC(0x475266));
             continue;
         }
-        uint32_t bg = (i == g_hover) ? 0x003A5A8Au : 0x00232A35u;
+        uint32_t bg = (i == g_hover) ? TC(0x3A5A8A) : TC(0x232A35);
         if (i == g_hover) gfx_fill_rect(g_x + 2, y, g_w - 4, ITEM_H, bg);
-        gfx_draw_text(g_x + 14, y + 6, g_label[i], g_dis[i] ? 0x00707A88u : 0x00E8EEF6u, bg);
+        gfx_draw_text(g_x + 14, y + 6, g_label[i], g_dis[i] ? TC(0x707A88) : TC(0xE8EEF6), bg);
     }
 }
 

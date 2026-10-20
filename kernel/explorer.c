@@ -25,6 +25,8 @@
  * their app, pictures open in Photos, fonts install, USB sticks eject.
  */
 #include "explorer.h"
+#include "i18n.h"
+#include "theme.h"
 #include "keyboard.h"
 #include "utf8.h"
 #include "gfx.h"
@@ -67,25 +69,25 @@
 #define THUMB     52
 
 /* Windows 7 colours */
-#define C_FRAME    0x001D232Cu
-#define C_TITLE    0x00384562u
-#define C_NAVBAR   0x00D6E3F3u
-#define C_NAVBAR2  0x00C3D5EDu
-#define C_CMD      0x00EEF3FAu
-#define C_CMD2     0x00DDE7F3u
-#define C_LINE     0x00C9D6E6u
-#define C_WHITE    0x00FFFFFFu
-#define C_PANE     0x00F6F9FDu
-#define C_TEXT     0x001E1E1Eu
-#define C_DIM      0x005B6B7Fu
-#define C_NAVTEXT  0x001E395Bu
-#define C_HOVER    0x00E5F3FFu
-#define C_HOVER_B  0x00CCE8FFu
-#define C_SEL      0x00CCE8FFu
-#define C_SEL_B    0x0099D1FFu
-#define C_BOX_B    0x008AA0BBu
-#define C_WARN     0x00B5452Fu
-#define C_DET      0x00E8EFF8u
+#define C_FRAME    TC(0x1D232C)               /* (the frame is the dark windows' one) */
+#define C_TITLE    TC(0x384562)
+#define C_NAVBAR   TCL(0xD6E3F3)
+#define C_NAVBAR2  TCL(0xC3D5ED)
+#define C_CMD      TCL(0xEEF3FA)
+#define C_CMD2     TCL(0xDDE7F3)
+#define C_LINE     TCL(0xC9D6E6)
+#define C_WHITE    TCL(0xFFFFFF)
+#define C_PANE     TCL(0xF6F9FD)
+#define C_TEXT     TCL(0x1E1E1E)
+#define C_DIM      TCL(0x5B6B7F)
+#define C_NAVTEXT  TCL(0x1E395B)
+#define C_HOVER    TCL(0xE5F3FF)
+#define C_HOVER_B  TCL(0xCCE8FF)
+#define C_SEL      TCL(0xCCE8FF)
+#define C_SEL_B    TCL(0x99D1FF)
+#define C_BOX_B    TCL(0x8AA0BB)
+#define C_WARN     TCL(0xB5452F)
+#define C_DET      TCL(0xE8EFF8)
 
 typedef struct {
     int is_dir;
@@ -545,7 +547,7 @@ static void delete_for_good(void) {
 
 static void install_package(const char* path) {
     char msg[160], m2[112];
-    set_status("Installing...");
+    set_status(_("Installing..."));
     if (pkg_install(path, msg, sizeof(msg)) == 0) { kstrlcpy(m2, msg, sizeof(m2)); set_status(m2); }
     else { ksnprintf(m2, sizeof(m2), "Not installed: %s", msg); set_status_c(m2, 1); }
 }
@@ -587,7 +589,7 @@ static int open_media(const char* path, const char* name) {
 
 static void set_wallpaper(const char* path, const char* name) {
     char err[80], msg[112];
-    set_status("Setting the wallpaper...");
+    set_status(_("Setting the wallpaper..."));
     if (wallpaper_set_file(path, IMAGE_FILL, err, sizeof(err)) == 0) { ksnprintf(msg, sizeof(msg), "Wallpaper: %s", name); set_status(msg); }
     else { ksnprintf(msg, sizeof(msg), "Not a usable picture: %s", err); set_status_c(msg, 1); }
 }
@@ -705,7 +707,7 @@ static void clip_selected(int cut) {
 static void paste_here(void) {
     if (fileops_clip_count()) {
         char msg[112];
-        set_status("Copying...");
+        set_status(_("Copying..."));
         fileops_paste(g_path, msg, sizeof(msg));
         scan();
         set_status(msg);
@@ -755,13 +757,13 @@ void explorer_start_rename(void) {
     if (g_sel < 0) return;
     g_renaming = g_sel;
     kstrlcpy(g_rename, item_name(&g_items[g_sel]), sizeof(g_rename));
-    set_status("Type the new name - Enter: rename, Esc: cancel");
+    set_status(_("Type the new name - Enter: rename, Esc: cancel"));
 }
 
 static void finish_rename(void) {
     int i = g_renaming;
     g_renaming = -1;
-    if (i < 0 || i >= g_count || !g_rename[0] || strchr(g_rename, '/')) { set_status("Not renamed"); return; }
+    if (i < 0 || i >= g_count || !g_rename[0] || strchr(g_rename, '/')) { set_status(_("Not renamed")); return; }
     char from[FS_PATH_LEN], to[FS_PATH_LEN], msg[112];
     child_path(item_name(&g_items[i]), from, sizeof(from));
     child_path(g_rename, to, sizeof(to));
@@ -862,7 +864,7 @@ static void extract_zip(const char* path, const char* name, int here) {
     zip_stats_t st;
     if (here) kstrlcpy(dest, g_path, sizeof(dest));
     else { stem_of(name, 0, stem, sizeof(stem)); free_name(stem, "", dest, sizeof(dest)); }
-    set_status("Extracting...");
+    set_status(_("Extracting..."));
     int rc = zip_extract(path, dest, 0, NULL, NULL, &st, err, sizeof(err));
     if (rc < 0) {
         if (!here && fs_find_dir(dest) >= 0 && !st.files && !st.dirs) fs_delete(dest, 1);
@@ -891,7 +893,7 @@ static void compress_selected(void) {
     char stem[FS_NAME_LEN], zp[FS_PATH_LEN], err[FS_PATH_LEN + 80], msg[160];
     stem_of(item_name(&g_items[g_sel]), g_items[g_sel].is_dir, stem, sizeof(stem));
     free_name(stem, ".zip", zp, sizeof(zp));
-    set_status("Compressing...");
+    set_status(_("Compressing..."));
     zip_stats_t st;
     int rc = zip_create(zp, ptrs, n, 0, NULL, NULL, &st, err, sizeof(err));
     scan();
@@ -939,12 +941,12 @@ static void menu_cb(int id, void* arg) {
     case M_NEWFOLDER: new_folder(); break;
     case M_NEWFILE: new_text_file(); break;
     case M_TERMINAL: terminal_at(g_sel >= 0 && g_items[g_sel].is_dir ? path : g_path); break;
-    case M_REFRESH: scan(); set_status("Refreshed"); break;
+    case M_REFRESH: scan(); set_status(_("Refreshed")); break;
     case M_USB: go("/mnt/usb"); break;
     case M_EJECT: eject_here(); break;
     case M_PROPS: properties(); break;
     case M_SHORTCUT:                              /* a shortcut to it on the desktop */
-        if (g_sel >= 0 && g_sel < g_count && gui_desktop_shortcut(item_name(&g_items[g_sel]), path) == 0) set_status("A shortcut is on the desktop");
+        if (g_sel >= 0 && g_sel < g_count && gui_desktop_shortcut(item_name(&g_items[g_sel]), path) == 0) set_status(_("A shortcut is on the desktop"));
         break;
     case M_CLOSE: explorer_close(); break;
     case M_VIEW_DETAILS: g_view_icons = 0; g_scroll = 0; break;
@@ -1371,7 +1373,7 @@ void explorer_key(char c) {
     g_gen++;
     if (g_renaming >= 0) {
         if (c == '\n') finish_rename();
-        else if (c == 27) { g_renaming = -1; set_status("Not renamed"); }
+        else if (c == 27) { g_renaming = -1; set_status(_("Not renamed")); }
         else if (c != '/') text_edit(g_rename, FS_NAME_LEN, c);
         return;
     }
@@ -1448,7 +1450,7 @@ void explorer_fkey(int k) {
     if (k == KEYF_F1 + 1) explorer_start_rename();                       /* F2 */
     else if (k == KEYF_F1 + 2) g_search_focus = 1;                      /* F3 */
     else if (k == KEYF_F1 + 3) { g_addr_edit = 1; kstrlcpy(g_addr, g_path, sizeof(g_addr)); }   /* F4 */
-    else if (k == KEYF_F1 + 4) { scan(); set_status("Refreshed"); }     /* F5 */
+    else if (k == KEYF_F1 + 4) { scan(); set_status(_("Refreshed")); }     /* F5 */
     g_gen++;
 }
 
@@ -1704,14 +1706,14 @@ static void blit_thumb(int x, int y) {
 
 /* a little round button with an arrow (back / forward) */
 static void round_button(int x, int y, int w, int h, int enabled, int hover, int dir) {
-    uint32_t fill = !enabled ? 0x00DCE5F1u : hover ? 0x00B9D9FBu : 0x00E9F1FBu;
-    uint32_t edge = enabled ? 0x006E8DB5u : 0x00AFC1D7u;
+    uint32_t fill = !enabled ? TCL(0xDCE5F1) : hover ? TCL(0xB9D9FB) : TCL(0xE9F1FB);
+    uint32_t edge = enabled ? TCL(0x6E8DB5) : TCL(0xAFC1D7);
     gfx_fill_rect(x + 2, y, w - 4, h, edge);
     gfx_fill_rect(x, y + 2, w, h - 4, edge);
     gfx_fill_rect(x + 1, y + 1, w - 2, h - 2, edge);
     gfx_fill_rect(x + 2, y + 1, w - 4, h - 2, fill);
     gfx_fill_rect(x + 1, y + 2, w - 2, h - 4, fill);
-    uint32_t a = enabled ? 0x002A4E7Eu : 0x0098AABFu;
+    uint32_t a = enabled ? TCL(0x2A4E7E) : TCL(0x98AABF);
     int cx = x + w / 2, cy = y + h / 2;
     for (int i = 0; i < 5; i++) {                           /* an arrow head and shaft */
         int ax = dir < 0 ? cx - 4 + i : cx + 4 - i;
@@ -1726,13 +1728,13 @@ static void cmd_button(int t, const char* label, int pressed) {
     int x, y, w, h;
     tool_rect(t, &x, &y, &w, &h);
     x += g_x; y += g_y;
-    if (pressed) frame(x, y, w, h, 0x00C4DDF6u, 0x007DA2CEu);
-    else if (g_hover_tool == t) frame(x, y, w, h, 0x00E3EFFCu, 0x00A9C6EAu);
+    if (pressed) frame(x, y, w, h, TCL(0xC4DDF6), TCL(0x7DA2CE));
+    else if (g_hover_tool == t) frame(x, y, w, h, TCL(0xE3EFFC), TCL(0xA9C6EA));
     /* a menu button: its label, then a small drop-down arrow */
     int arrow = t == T_ORGANIZE;
     int tw = (int)strlen(label) * 8 + (arrow ? 10 : 0);
     int tx = x + (w - tw) / 2;
-    gfx_draw_text(tx, y + 7, label, C_TEXT, pressed ? 0x00C4DDF6u : g_hover_tool == t ? 0x00E3EFFCu : C_CMD);
+    gfx_draw_text(tx, y + 7, label, C_TEXT, pressed ? TCL(0xC4DDF6) : g_hover_tool == t ? TCL(0xE3EFFC) : C_CMD);
     if (arrow) {
         int ax = tx + (int)strlen(label) * 8 + 4, ay = y + 10;
         for (int r = 0; r < 3; r++) gfx_fill_rect(ax + r, ay + r, 5 - 2 * r, 1, C_TEXT);
@@ -1749,7 +1751,7 @@ static void draw_toolbars(void) {
     int ax, ay, aw, ah;
     tool_rect(T_ADDR, &ax, &ay, &aw, &ah);
     ax += x; ay += y;
-    frame(ax, ay, aw, ah, C_WHITE, g_addr_edit ? 0x003C7FB1u : C_BOX_B);
+    frame(ax, ay, aw, ah, C_WHITE, g_addr_edit ? TCL(0x3C7FB1) : C_BOX_B);
     fileicon_draw(strcmp(g_path, "/") == 0 ? FI_COMPUTER : FI_FOLDER, ax + 4, ay + 3, 16);
     if (g_addr_edit) {
         int cols = (aw - 34) / 8;
@@ -1778,7 +1780,7 @@ static void draw_toolbars(void) {
     int sx, sy, sw, sh;
     tool_rect(T_SEARCH, &sx, &sy, &sw, &sh);
     sx += x; sy += y;
-    frame(sx, sy, sw, sh, C_WHITE, g_search_focus ? 0x003C7FB1u : C_BOX_B);
+    frame(sx, sy, sw, sh, C_WHITE, g_search_focus ? TCL(0x3C7FB1) : C_BOX_B);
     fileicon_draw(FI_SEARCH, sx + sw - 20, sy + 3, 16);
     int cols = (sw - 30) / 8;
     if (g_search[0] || g_search_focus) {
@@ -1791,7 +1793,7 @@ static void draw_toolbars(void) {
     } else {
         char ph[64];
         ksnprintf(ph, sizeof(ph), "Search %s", strcmp(g_path, "/") == 0 ? "Computer" : !strcmp(g_path, TRASH_FILES) ? "Recycle Bin" : base_name(g_path));
-        draw_clip(sx + 6, sy + 7, ph, cols, 0x008C99A8u, C_WHITE);
+        draw_clip(sx + 6, sy + 7, ph, cols, TCL(0x8C99A8), C_WHITE);
     }
 
     /* the command bar */
@@ -1815,7 +1817,7 @@ static void draw_nav_pane(void) {
     if (total > h) {                                  /* more than fits: a thin bar says where */
         int bh = h * h / total, by = (h - bh) * g_nav_scroll / (total - h);
         if (bh < 16) bh = 16;
-        gfx_fill_rect(x + PANE_W - 7, y + by, 3, bh, 0x00B0B8C4u);
+        gfx_fill_rect(x + PANE_W - 7, y + by, 3, bh, TCL(0xB0B8C4));
     }
     for (int i = 0; i < NPLACES; i++) {
         int py = place_y(i);
@@ -1834,7 +1836,7 @@ static void draw_nav_pane(void) {
 }
 
 static void draw_rename_box(int x, int y, int w) {
-    frame(x, y, w, 18, C_WHITE, 0x003C7FB1u);
+    frame(x, y, w, 18, C_WHITE, TCL(0x3C7FB1));
     int cols = (w - 8) / 8;
     const char* s = g_rename;
     int n = (int)strlen(s);
@@ -1850,18 +1852,18 @@ static void draw_details_view(void) {
     int name_end = date_x >= 0 ? date_x : type_x;
     /* headers */
     gfx_fill_rect(x, y, w, HDR_H, C_WHITE);
-    gfx_fill_rect(x, y + HDR_H - 1, w, 1, 0x00E5E5E5u);
+    gfx_fill_rect(x, y + HDR_H - 1, w, 1, TCL(0xE5E5E5));
     const char* hdr[4] = { "Name", "Date modified", "Type", "Size" };
     int hx[4] = { 0, date_x, type_x, size_x };
     for (int c = 0; c < 4; c++) {
         if (hx[c] < 0) continue;
-        gfx_draw_text(x + hx[c] + 8, y + 7, hdr[c], 0x004C607Au, C_WHITE);
-        if (c) gfx_fill_rect(x + hx[c], y + 3, 1, HDR_H - 6, 0x00E5E5E5u);
+        gfx_draw_text(x + hx[c] + 8, y + 7, hdr[c], TCL(0x4C607A), C_WHITE);
+        if (c) gfx_fill_rect(x + hx[c], y + 3, 1, HDR_H - 6, TCL(0xE5E5E5));
         if (g_sort == c) {                                  /* the sort arrow */
             int ax = x + hx[c] + 8 + (int)strlen(hdr[c]) * 8 + 8;
             for (int k = 0; k < 4; k++) {
                 int yy = g_sort_desc ? y + 9 + k : y + 12 - k;
-                gfx_fill_rect(ax + k, yy, 7 - 2 * k, 1, 0x00869BB4u);
+                gfx_fill_rect(ax + k, yy, 7 - 2 * k, 1, TCL(0x869BB4));
             }
         }
     }
@@ -1883,16 +1885,16 @@ static void draw_details_view(void) {
         if (date_x >= 0) {
             char d[24];
             rtc_format(item_mtime(it), d, sizeof(d));
-            gfx_draw_text(x + date_x + 8, ry + 6, d, 0x006D6D6Du, bg);
+            gfx_draw_text(x + date_x + 8, ry + 6, d, TCL(0x6D6D6D), bg);
         }
         char t[40];
         type_of(it, t, sizeof(t));
-        draw_clip(x + type_x + 8, ry + 6, t, (size_x - type_x - 12) / 8, 0x006D6D6Du, bg);
+        draw_clip(x + type_x + 8, ry + 6, t, (size_x - type_x - 12) / 8, TCL(0x6D6D6D), bg);
         if (!it->is_dir) {
             char s[24];
             human_size(item_size(it), s, sizeof(s));
             int sw = (int)strlen(s) * 8;
-            gfx_draw_text(x + w - 10 - sw, ry + 6, s, 0x006D6D6Du, bg);
+            gfx_draw_text(x + w - 10 - sw, ry + 6, s, TCL(0x6D6D6D), bg);
         }
     }
 }
@@ -1934,30 +1936,30 @@ static void draw_icons_view(void) {
 
 static void draw_scrollbar(void) {
     int x = g_x + content_x() + content_w() - SB_W, top = g_y + list_top(), h = body_h() - (list_top() - BODY_Y);
-    gfx_fill_rect(x, top, SB_W, h, 0x00F0F0F0u);
+    gfx_fill_rect(x, top, SB_W, h, TCL(0xF0F0F0));
     int lines = g_view_icons ? (g_count + per_row() - 1) / per_row() : g_count;
     /* arrows */
     for (int k = 0; k < 4; k++) {
-        gfx_fill_rect(x + 7 - k, top + 5 + k, 2 * k + 1, 1, 0x00606060u);
-        gfx_fill_rect(x + 7 - k, top + h - 6 - k, 2 * k + 1, 1, 0x00606060u);
+        gfx_fill_rect(x + 7 - k, top + 5 + k, 2 * k + 1, 1, TCL(0x606060));
+        gfx_fill_rect(x + 7 - k, top + h - 6 - k, 2 * k + 1, 1, TCL(0x606060));
     }
     if (lines <= content_rows()) return;
     int track = h - 2 * SB_W;
     int th = track * content_rows() / lines;
     if (th < 16) th = 16;
     int ty = top + SB_W + (track - th) * g_scroll / (max_scroll() ? max_scroll() : 1);
-    frame(x + 2, ty, SB_W - 4, th, 0x00CDCDCDu, 0x00A6A6A6u);
+    frame(x + 2, ty, SB_W - 4, th, TCL(0xCDCDCD), TCL(0xA6A6A6));
 }
 
 static void draw_details_pane(void) {
     int x = g_x + 3, y = g_y + WIN_H - DET_H - 3, w = WIN_W - 6;
-    gradient(x, y, w, DET_H, 0x00F1F5FBu, 0x00DCE6F3u);
+    gradient(x, y, w, DET_H, TCL(0xF1F5FB), TCL(0xDCE6F3));
     gfx_fill_rect(x, y, w, 1, C_LINE);
     int ix = x + 12, iy = y + 5;
     int tx = ix + THUMB + 14;
     int cols = (w - (tx - x) - 12) / 8;
     char l1[112], l2[112], size[24], type[40];
-    uint32_t bg = 0x00E8EFF8u;
+    uint32_t bg = TCL(0xE8EFF8);
     if (g_sel >= 0 && g_sel < g_count) {
         const item_t* it = &g_items[g_sel];
         type_of(it, type, sizeof(type));
@@ -1986,7 +1988,7 @@ static void draw_details_pane(void) {
             char l3[112];
             if (dc[0]) ksnprintf(l3, sizeof(l3), "Date modified: %s    Date created: %s", dm, dc);
             else ksnprintf(l3, sizeof(l3), "Date modified: %s", dm);
-            draw_clip(tx, y + 46, l3, cols, 0x005E6F86u, 0x00DFE8F4u);
+            draw_clip(tx, y + 46, l3, cols, TCL(0x5E6F86), TCL(0xDFE8F4));
         }
     } else {
         fileicon_draw(strcmp(g_path, "/") == 0 ? FI_COMPUTER : FI_FOLDER_OPEN, ix + 2, iy + 2, 48);
@@ -1999,8 +2001,8 @@ static void draw_details_pane(void) {
         ksnprintf(l2, sizeof(l2), "%s    %d file%s, %s", g_path, nf, nf == 1 ? "" : "s", size);
     }
     draw_clip(tx, y + 14, l1, cols, C_TEXT, bg);
-    draw_clip(tx, y + 30, l2, cols, 0x005E6F86u, 0x00E3EBF6u);
-    if (g_status[0]) draw_clip(tx, y + 46, g_status, cols, g_status_warn ? C_WARN : 0x002A6F2Fu, 0x00DFE8F4u);
+    draw_clip(tx, y + 30, l2, cols, TCL(0x5E6F86), TCL(0xE3EBF6));
+    if (g_status[0]) draw_clip(tx, y + 46, g_status, cols, g_status_warn ? C_WARN : TCL(0x2A6F2F), TCL(0xDFE8F4));
 }
 
 void explorer_draw(const fb_info_t* fi) {
@@ -2009,13 +2011,13 @@ void explorer_draw(const fb_info_t* fi) {
     scan();
     int x = g_x, y = g_y;
     /* the frame and title bar, like the other windows */
-    gfx_fill_rect(x, y, WIN_W, WIN_H, 0x00505D72u);
+    gfx_fill_rect(x, y, WIN_W, WIN_H, TCL(0x505D72));
     gfx_fill_rect(x + 1, y + 1, WIN_W - 2, WIN_H - 2, C_FRAME);
     gfx_fill_rect(x + 3, y + 3, WIN_W - 6, TITLE_H - 1, C_TITLE);
     fileicon_draw(FI_FOLDER, x + 7, y + 4, 16);
     char title[64];
     ksnprintf(title, sizeof(title), "%s", strcmp(g_path, "/") == 0 ? "Computer" : !strcmp(g_path, TRASH_FILES) ? "Recycle Bin" : base_name(g_path));
-    draw_clip(x + 28, y + 8, title, (WIN_W - 120) / 8, 0x00FFFFFFu, C_TITLE);
+    draw_clip(x + 28, y + 8, title, (WIN_W - 120) / 8, TC(0xFFFFFF), C_TITLE);
     win_draw_buttons(&g_win, 4, 12);
 
     draw_toolbars();
@@ -2044,8 +2046,8 @@ void explorer_draw(const fb_info_t* fi) {
                     uint32_t p = t[yy * stride + xx];
                     t[yy * stride + xx] = ((p & 0x00FEFEFEu) >> 1) + ((0x00CFE3F8u & 0x00FEFEFEu) >> 1);   /* half and half */
                 }
-            gfx_fill_rect(x0, y0, x1 - x0, 1, 0x003399FFu); gfx_fill_rect(x0, y1 - 1, x1 - x0, 1, 0x003399FFu);
-            gfx_fill_rect(x0, y0, 1, y1 - y0, 0x003399FFu); gfx_fill_rect(x1 - 1, y0, 1, y1 - y0, 0x003399FFu);
+            gfx_fill_rect(x0, y0, x1 - x0, 1, TCL(0x3399FF)); gfx_fill_rect(x0, y1 - 1, x1 - x0, 1, TCL(0x3399FF));
+            gfx_fill_rect(x0, y0, 1, y1 - y0, TCL(0x3399FF)); gfx_fill_rect(x1 - 1, y0, 1, y1 - y0, TCL(0x3399FF));
         }
     }
 }

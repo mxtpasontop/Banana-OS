@@ -40,6 +40,13 @@ static const family_t FAMILIES[] = {
     { 0x1002, 0x67C0, 0x67FF, "AMD Radeon RX 400 / 500 series (Polaris)" },
     { 0x1002, 0x6980, 0x699F, "AMD Radeon RX 500 series (Polaris 12)" },
     { 0x1002, 0x1500, 0x17FF, "AMD Radeon Graphics (Ryzen processor)" },
+    { 0x1002, 0x6800, 0x683F, "AMD Radeon HD 7700 / 7800 / R7 / R9 (GCN)" },
+    { 0x1002, 0x6780, 0x679F, "AMD Radeon HD 7900 / R9 280 (Tahiti)" },
+    { 0x1002, 0x6880, 0x68FF, "AMD Radeon HD 5000 / 6000 series (Evergreen)" },
+    { 0x1002, 0x6760, 0x677F, "AMD Radeon HD 6400 / 7400 series (Caicos)" },
+    { 0x1002, 0x6740, 0x675F, "AMD Radeon HD 6500 / 6600 / 7500 / 7600 series (Turks)" },
+    { 0x1002, 0x6700, 0x673F, "AMD Radeon HD 6800 / 6900 series (Barts, Cayman)" },
+    { 0x1002, 0x6FDF, 0x6FDF, "AMD Radeon RX 580 2048SP (Polaris 20)" },
     { 0x1002, 0x13C0, 0x13FF, "AMD Radeon Graphics (Ryzen processor)" },
     /* Intel */
     { 0x8086, 0xE200, 0xE2FF, "Intel Arc B-series (Battlemage)" },
@@ -59,6 +66,7 @@ static const family_t FAMILIES[] = {
     { 0x8086, 0x1900, 0x193F, "Intel HD Graphics 500 series (Skylake)" },
     { 0x8086, 0x1600, 0x163F, "Intel HD Graphics (Broadwell)" },
     { 0x8086, 0x0400, 0x0D2F, "Intel HD Graphics (Haswell)" },
+    { 0x8086, 0x0040, 0x004F, "Intel HD Graphics (Ironlake)" },
 };
 
 const char* gpu_family_name(uint16_t vendor, uint16_t device) {

@@ -91,6 +91,30 @@ int  banana_set_wallpaper(const char* path, int mode, char* err, int errcap);
  * 0 (resp->status, resp->data - free() it), or -1 (resp->err) */
 int  banana_http_fetch(const banana_http_req_t* req, banana_http_resp_t* resp);
 int  banana_key_mods(void);                /* BANANA_MOD_SHIFT / _CTRL / _ALT held */
+
+/* ── languages ──────────────────────────────────────────────────────
+ * The desktop's language: "en" (English, the default), "fr", "de" - and
+ * "en" on a Banana OS older than this function. An app that translates
+ * itself gives its catalogs once and wraps its texts in banana_tr() (or
+ * _() with #define BANANA_UNDERSCORE before banana.h); a text with no translation
+ * stays in English. Apps that do nothing keep working, in English.
+ *
+ *     static const banana_tr_t FR[] = { { "Hello", "Bonjour" }, { 0, 0 } };
+ *     static const banana_catalog_t LANGS[] = { { "fr", FR }, { 0, 0 } };
+ *     banana_tr_init(LANGS);
+ *     printf("%s\n", _("Hello"));
+ *
+ * A catalog can also be a text file - one "English = translation" a line,
+ * # for comments - read with banana_tr_load("/apps/myapp/fr.lang"). */
+const char* banana_language(void);
+typedef struct { const char* en; const char* tr; } banana_tr_t;
+typedef struct { const char* lang; const banana_tr_t* pairs; } banana_catalog_t;
+void        banana_tr_init(const banana_catalog_t* catalogs);   /* ends with { 0, 0 } */
+int         banana_tr_load(const char* path);                   /* for the desktop's language: entries read, or -1 */
+const char* banana_tr(const char* en);
+#if defined(BANANA_UNDERSCORE) && !defined(_)
+#define _(s) banana_tr(s)
+#endif
 void bwin_wheel(bwin_t* win);              /* the wheel as BANANA_EV_WHEEL (ev.y notches) */
 /* files dropped on the window come as BANANA_EV_DROP (ev.key paths, ev.x / ev.y
  * where): path `index` of them; 0, or -1 */

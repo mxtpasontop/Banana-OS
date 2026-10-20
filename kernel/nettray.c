@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "nettray.h"
+#include "i18n.h"
+#include "theme.h"
 #include "gfx.h"
 #include "kstring.h"
 #include "timer.h"
@@ -72,8 +74,8 @@ static void cross(int x, int y, uint32_t c) {
 /* kind's glyph in 16x16 at x, y: a screen on its stand (wired), the same
  * with a plug (USB), or bars (Wi-Fi), lit by state */
 static void draw_glyph(int x, int y, int kind, int state, int signal, uint32_t bg) {
-    uint32_t frame = 0x00C8D2DEu, lit = 0x0068A8F0u, dim = 0x003A4556u;
-    uint32_t screen = state == ST_CONNECTED ? lit : state == ST_CONNECTING ? 0x00C9A45Cu : dim;
+    uint32_t frame = TC(0xC8D2DE), lit = TC(0x68A8F0), dim = TC(0x3A4556);
+    uint32_t screen = state == ST_CONNECTED ? lit : state == ST_CONNECTING ? TC(0xC9A45C) : dim;
     (void)bg;
     if (kind == NT_WIFI) {
         for (int b = 0; b < 4; b++) {
@@ -86,18 +88,18 @@ static void draw_glyph(int x, int y, int kind, int state, int signal, uint32_t b
         gfx_fill_rect(x + 6, y + 11, 4, 2, frame);           /* its stand */
         gfx_fill_rect(x + 4, y + 13, 8, 2, frame);
         if (kind == NT_USB) { gfx_fill_rect(x + 12, y + 12, 4, 3, frame); px(x + 13, y + 15, frame); }
-        if (state == ST_CONNECTING && (timer_ms() / 400) % 2) gfx_fill_rect(x + 5, y + 5, 6, 2, 0x00FFFFFFu);
+        if (state == ST_CONNECTING && (timer_ms() / 400) % 2) gfx_fill_rect(x + 5, y + 5, 6, 2, TC(0xFFFFFF));
     }
-    if (state == ST_NO_LINK || state < 0) cross(x + 9, y + 8, 0x00E05A4Au);
+    if (state == ST_NO_LINK || state < 0) cross(x + 9, y + 8, TC(0xE05A4A));
 }
 
 void nettray_draw_icon(int x, int y, uint32_t bg, int hover) {
     nt_conn_t c[NT_MAX];
     int n = collect(c, NT_MAX), kind, st = overall(c, n, &kind);
-    if (hover) gfx_fill_rect(x - 2, y - 3, NETTRAY_ICON_W, 22, 0x00303A4Au);
+    if (hover) gfx_fill_rect(x - 2, y - 3, NETTRAY_ICON_W, 22, TC(0x303A4A));
     int sig = 0;
     for (int i = 0; i < n; i++) if (c[i].active) sig = c[i].signal;
-    draw_glyph(x, y, kind, st, sig, hover ? 0x00303A4Au : bg);
+    draw_glyph(x, y, kind, st, sig, hover ? TC(0x303A4A) : bg);
 }
 
 void nettray_summary(char* out, int cap) {
@@ -117,15 +119,15 @@ void nettray_summary(char* out, int cap) {
 #define PW      320
 #define LH      18
 #define PAD     12
-#define C_BG    0x001D232Cu
-#define C_EDGE  0x00505E74u
-#define C_TEXT  0x00E8EEF6u
-#define C_DIM   0x009AA6B6u
-#define C_HEAD  0x00FFFFFFu
-#define C_LINK  0x0068A8F0u
-#define C_OK    0x008FE3A1u
-#define C_WAIT  0x00C9A45Cu
-#define C_BAD   0x00E07A6Au
+#define C_BG    TC(0x1D232C)
+#define C_EDGE  TC(0x505E74)
+#define C_TEXT  TC(0xE8EEF6)
+#define C_DIM   TC(0x9AA6B6)
+#define C_HEAD  TC(0xFFFFFF)
+#define C_LINK  TC(0x68A8F0)
+#define C_OK    TC(0x8FE3A1)
+#define C_WAIT  TC(0xC9A45C)
+#define C_BAD   TC(0xE07A6A)
 
 static int g_open, g_right, g_bar_y, g_x, g_y, g_h;
 static int g_hover = -1;                      /* the button under the mouse: an adapter's, or NT_MAX (settings) */
@@ -161,9 +163,9 @@ static void row(int x, int y, const char* k, const char* v) {
 
 static void button(int i, int x, int y, const char* label, netdev_t* dev) {
     int w = (int)strlen(label) * 8 + 16;
-    uint32_t base = g_hover == i ? 0x00405478u : 0x00303A4Au;
+    uint32_t base = g_hover == i ? TC(0x405478) : TC(0x303A4A);
     gfx_fill_rect(x, y - 3, w, LH + 2, base);
-    gfx_fill_rect(x, y - 3, w, 1, 0x006B7892u);
+    gfx_fill_rect(x, y - 3, w, 1, TC(0x6B7892));
     gfx_draw_text(x + 8, y, label, C_TEXT, base);
     if (g_nbtn < NT_MAX + 1) {
         g_btn[g_nbtn].x = x; g_btn[g_nbtn].y = y - 3; g_btn[g_nbtn].w = w; g_btn[g_nbtn].h = LH + 2;
@@ -183,18 +185,18 @@ void nettray_draw(void) {
     g_y = g_bar_y - 4 - g_h;
     if (g_y < 4) g_y = 4;
     int x = g_x + PAD, y = g_y + PAD;
-    gfx_fill_rect(g_x + 4, g_y + 4, PW, g_h, 0x00080A0Eu);    /* a shadow */
+    gfx_fill_rect(g_x + 4, g_y + 4, PW, g_h, TC(0x080A0E));    /* a shadow */
     gfx_fill_rect(g_x, g_y, PW, g_h, C_BG);
     gfx_fill_rect(g_x, g_y, PW, 1, C_EDGE); gfx_fill_rect(g_x, g_y + g_h - 1, PW, 1, C_EDGE);
     gfx_fill_rect(g_x, g_y, 1, g_h, C_EDGE); gfx_fill_rect(g_x + PW - 1, g_y, 1, g_h, C_EDGE);
-    gfx_draw_text(x, y, "Network", C_HEAD, C_BG);
+    gfx_draw_text(x, y, _("Network"), C_HEAD, C_BG);
     y += LH;
-    gfx_fill_rect(x, y + 2, PW - 2 * PAD, 1, 0x00343E4Eu);
+    gfx_fill_rect(x, y + 2, PW - 2 * PAD, 1, TC(0x343E4E));
     y += 8;
     g_nbtn = 0;
     if (!n) {
-        gfx_draw_text(x, y, "No network adapter found.", C_TEXT, C_BG);
-        gfx_draw_text(x, y + LH, "Plug one in, or see the README.", C_DIM, C_BG);
+        gfx_draw_text(x, y, _("No network adapter found."), C_TEXT, C_BG);
+        gfx_draw_text(x, y + LH, _("Plug one in, or see the README."), C_DIM, C_BG);
         y += LH * 2;
     }
     char t[64], v[48];
@@ -232,15 +234,15 @@ void nettray_draw(void) {
             ksnprintf(v, sizeof(v), "%s / %s", s1, s2);
             row(x + 24, y, "Sent / recvd", v); y += LH;
         } else {
-            button(i, x + 24, y + 2, "Use this one", d);
+            button(i, x + 24, y + 2, _("Use this one"), d);
             y += LH;
         }
         y += 8;
     }
-    gfx_fill_rect(x, y - 4, PW - 2 * PAD, 1, 0x00343E4Eu);
+    gfx_fill_rect(x, y - 4, PW - 2 * PAD, 1, TC(0x343E4E));
     y += 4;
     int sx = x, sw = 18 * 8;
-    gfx_draw_text(sx, y, "Network settings...", g_hover == NT_MAX ? C_HEAD : C_LINK, C_BG);
+    gfx_draw_text(sx, y, _("Network settings..."), g_hover == NT_MAX ? C_HEAD : C_LINK, C_BG);
     gfx_fill_rect(sx, y + 15, sw + 8, 1, g_hover == NT_MAX ? C_HEAD : C_LINK);
     if (g_nbtn < NT_MAX + 1) {
         g_btn[g_nbtn].x = sx; g_btn[g_nbtn].y = y - 2; g_btn[g_nbtn].w = sw + 8; g_btn[g_nbtn].h = LH;

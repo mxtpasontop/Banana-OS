@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "crash.h"
+#include "i18n.h"
+#include "theme.h"
 #include "boottime.h"
 #include "acpi_sleep.h"
 #include "gui.h"
@@ -40,6 +42,8 @@
 #include "shortcut.h"
 #include "launcher.h"
 #include "taskmgr.h"
+#include "devmgr.h"
+#include "diskmgr.h"
 #include "settings.h"
 #include "pkg.h"
 #include "image.h"
@@ -49,6 +53,9 @@
 #include "../net/net.h"
 #include "../shell/shell.h"
 #include "startmenu.h"
+#include "emojipick.h"
+#include "calpanel.h"
+#include "font.h"
 #include "fileicons.h"
 
 #define VGA_WIDTH  80
@@ -61,7 +68,7 @@
  * down, Lock, Exit to shell). */
 /* (About and Wallpaper live in Settings now: reached from the desktop's menu) */
 enum { ACT_TERMINAL = 0, ACT_FILES, ACT_BROWSER, ACT_NOTEPAD, ACT_APPS, ACT_TASKMGR, ACT_SETTINGS, ACT_QUIT, ACT_ABOUT,
-       ACT_WALLPAPER, ACT_LOCK, ACT_INSTALL, ACT_PROGRAMS, ACT_POWER, ACT_RESTART, ACT_SHUTDOWN, ACT_RUN_APP, ACT_SLEEP };
+       ACT_WALLPAPER, ACT_LOCK, ACT_INSTALL, ACT_PROGRAMS, ACT_POWER, ACT_RESTART, ACT_SHUTDOWN, ACT_RUN_APP, ACT_SLEEP, ACT_DEVMGR, ACT_DISKMGR };
 /* slots: the installer's ("Install Banana OS") is there only on the live CD */
 #define MENU_ITEMS_MAX 10
 #define MENU_SLOT_INSTALL 8
@@ -132,7 +139,7 @@ static int g_menu_sel = 0;     /* an ACT_* */
  * windows of installed apps) and the terminal windows share one stacking
  * order: the app windows have their own back-to-front order, and at most
  * one of them - g_front_app - is above the terminals. */
-enum { APP_FILES = 0, APP_BROWSER, APP_NOTEPAD, APP_LAUNCHER, APP_TASKMGR, APP_SETTINGS, APP_INSTALLER, APP_APPWIN, APP_COUNT };
+enum { APP_FILES = 0, APP_BROWSER, APP_NOTEPAD, APP_LAUNCHER, APP_TASKMGR, APP_SETTINGS, APP_INSTALLER, APP_DEVMGR, APP_DISKMGR, APP_APPWIN, APP_COUNT };
 typedef struct {
     int      (*is_open)(void);
     void     (*draw)(const fb_info_t* fi);
@@ -154,10 +161,12 @@ static const app_t g_apps[APP_COUNT] = {
     { taskmgr_is_open, taskmgr_draw, taskmgr_contains, taskmgr_click, taskmgr_mouse, taskmgr_signature, taskmgr_close, taskmgr_rclick, "Task Manager" },
     { settings_is_open, settings_draw, settings_contains, settings_click, settings_mouse, settings_signature, settings_close, settings_rclick, "Settings" },
     { installer_is_open, installer_draw, installer_contains, installer_click, installer_mouse, installer_signature, installer_close, installer_rclick, "Install Banana OS" },
+    { devmgr_is_open, devmgr_draw, devmgr_contains, devmgr_click, devmgr_mouse, devmgr_signature, devmgr_close, devmgr_rclick, "Device Manager" },
+    { diskmgr_is_open, diskmgr_draw, diskmgr_contains, diskmgr_click, diskmgr_mouse, diskmgr_signature, diskmgr_close, diskmgr_rclick, "Disk Management" },
     { appwin_is_open, appwin_draw, appwin_contains, appwin_click, appwin_mouse, appwin_signature, appwin_close_all, appwin_rclick, "App" },
 };
 static int g_front_app = -1;                        /* -1: a terminal window is in front */
-static int g_app_order[APP_COUNT] = { APP_FILES, APP_BROWSER, APP_NOTEPAD, APP_LAUNCHER, APP_TASKMGR, APP_SETTINGS, APP_INSTALLER, APP_APPWIN };   /* back to front */
+static int g_app_order[APP_COUNT] = { APP_FILES, APP_BROWSER, APP_NOTEPAD, APP_LAUNCHER, APP_TASKMGR, APP_SETTINGS, APP_INSTALLER, APP_DEVMGR, APP_DISKMGR, APP_APPWIN };   /* back to front */
 static int g_app_min[APP_COUNT];                    /* minimized to the taskbar */
 
 /* ── the window manager's state (see "the window manager" below) ──
@@ -188,7 +197,7 @@ static void raise_app(int a) {
 /* the topmost app window at a point, -1 if none (with_front: also the one above the terminals) */
 /* the mouse wheel, per app window (NULL: it does not scroll) */
 static void (*const g_app_wheel[APP_COUNT])(int mx, int my, int dz) = {
-    explorer_wheel, browser_wheel, notepad_wheel, NULL, NULL, settings_wheel, NULL, appwin_wheel,
+    explorer_wheel, browser_wheel, notepad_wheel, NULL, taskmgr_wheel, settings_wheel, NULL, devmgr_wheel, diskmgr_wheel, appwin_wheel,
 };
 
 static int app_at(int mx, int my, int with_front) {
@@ -354,6 +363,26 @@ static void draw_icon_taskmgr(int x, int y, uint32_t bg) {
     IR(11, 2, 2, 8, 0x0057B65Au);
 }
 
+/* a screen with a chip in front */
+static void draw_icon_devmgr(int x, int y, uint32_t bg) {
+    (void)bg;
+    icon_bevel(x, y, 14, 10, 0x00C8D2E0u, 0x00EEF2F8u, 0x00566477u);
+    IR(2, 2, 10, 6, 0x002F7FD0u);
+    IR(5, 10, 4, 2, 0x00566477u);
+    IR(3, 12, 8, 2, 0x00566477u);
+    IR(7, 6, 7, 7, 0x00263241u);
+    IR(9, 8, 3, 3, 0x0057B65Au);
+}
+
+/* a disk drive with its partitions */
+static void draw_icon_diskmgr(int x, int y, uint32_t bg) {
+    (void)bg;
+    icon_bevel(x, y + 2, 14, 10, 0x00C8D2E0u, 0x00EEF2F8u, 0x00566477u);
+    IR(2, 4, 6, 4, 0x00203F9Au);
+    IR(9, 4, 3, 4, 0x00101010u);
+    IR(2, 9, 2, 1, 0x003CC35Au);
+}
+
 /* a gear */
 static void draw_icon_settings(int x, int y, uint32_t bg) {
     const uint32_t c = 0x00C8D2E0u;
@@ -379,19 +408,19 @@ static void draw_icon_install(int x, int y, uint32_t bg) {
 
 static __attribute__((unused)) void draw_icon_power(int x, int y, uint32_t bg) {
     (void)bg;
-    icon_bevel(x, y, 12, 12, 0x00412A2Au, 0x00764A4Au, 0x00170D0Du);
-    gfx_draw_text_scaled(x + 3 * g_is, y + 2 * g_is, g_is, "o", 0x00FFFFFFu, 0x00412A2Au);
+    icon_bevel(x, y, 12, 12, TC(0x412A2A), TC(0x764A4A), TC(0x170D0D));
+    gfx_draw_text_scaled(x + 3 * g_is, y + 2 * g_is, g_is, "o", TC(0xFFFFFF), TC(0x412A2A));
 }
 
 /* Programs: a folder with app tiles in it */
 static __attribute__((unused)) void draw_icon_programs(int x, int y, uint32_t bg) {
     (void)bg;
-    IR(0, 1, 6, 2, 0x00D9B44Au);
-    IR(0, 3, 14, 10, 0x00D9B44Au);
-    IR(2, 5, 4, 3, 0x003A7BD5u);
-    IR(8, 5, 4, 3, 0x0057B65Au);
-    IR(2, 9, 4, 3, 0x00E07040u);
-    IR(8, 9, 4, 3, 0x00F4F8FFu);
+    IR(0, 1, 6, 2, TC(0xD9B44A));
+    IR(0, 3, 14, 10, TC(0xD9B44A));
+    IR(2, 5, 4, 3, TC(0x3A7BD5));
+    IR(8, 5, 4, 3, TC(0x57B65A));
+    IR(2, 9, 4, 3, TC(0xE07040));
+    IR(8, 9, 4, 3, TC(0xF4F8FF));
 }
 
 /* an installed app's own picture (/apps/<name>/icon.png), decoded once at
@@ -862,6 +891,7 @@ static void term_copy_selection(const term_win_t* w) {
             uint32_t ch;
             uint8_t co;
             term_cell(w, chars, cols, stride, r, c, &ch, &co);
+            if (ch == TERMINAL_WIDE_CONT) continue;             /* (a wide character's second cell) */
             if (ch >= 0x80) n += (uint32_t)u8_encode(ch, out + n);
             else out[n++] = ch ? (char)ch : ' ';
         }
@@ -944,15 +974,17 @@ static uint64_t cell_key(uint32_t c, uint8_t color, int sel, int hl, int cur) {
     return (uint64_t)(c & 0x1FFFFFu) | (uint64_t)color << 21 | (uint64_t)sel << 29 | (uint64_t)hl << 30 | (uint64_t)cur << 32;
 }
 
-/* one cell's picture (cur: the cursor's shape + 1 if it is on it) */
+/* one cell's picture (cur: the cursor's shape + 1 if it is on it); a wide
+ * character fills this cell and the next */
 static void cell_draw(int x, int y, int CW, int CH, uint32_t c, uint8_t color, int sel, int hl, int cur) {
     uint32_t fg = vga_color_rgb(color & 0x0F), bg = vga_color_rgb((color >> 4) & 0x0F);
+    int cells = gfx_char_cols(c ? c : ' ') == 2 ? 2 : 1;
     if (cur == 1 + TERM_CURSOR_BLOCK) { gfx_draw_cell_cp(x, y, c ? c : ' ', bg, fg); return; }     /* (the character in reverse) */
-    if (hl) gfx_draw_cell_cp(x, y, c ? c : ' ', 0x00101010u, hl == 2 ? 0x00FF9632u : 0x00E8D24Au);
-    else if (sel) gfx_draw_cell_cp(x, y, c ? c : ' ', 0x00101010u, 0x00C8D8F0u);
+    if (hl) gfx_draw_cell_cp(x, y, c ? c : ' ', TC(0x101010), hl == 2 ? TC(0xFF9632) : TC(0xE8D24A));
+    else if (sel) gfx_draw_cell_cp(x, y, c ? c : ' ', TC(0x101010), TC(0xC8D8F0));
     else gfx_draw_cell_cp(x, y, c ? c : ' ', fg, bg);
     if (cur == 1 + TERM_CURSOR_BAR) gfx_fill_rect(x, y, 2, CH, fg);
-    else if (cur) gfx_fill_rect(x, y + CH - 1, CW, 1, fg);
+    else if (cur) gfx_fill_rect(x, y + CH - 1, CW * cells, 1, fg);
 }
 
 /* what the frame around the text shows: title, tabs, bell, find bar... */
@@ -1031,16 +1063,20 @@ static int term_cells(const fb_info_t* fi, const term_win_t* win, int mode, int 
             changed++;
             if (mode == TC_DRY) continue;
             if (kp) *kp = key;
+            if (c == TERMINAL_WIDE_CONT) continue;      /* (a wide character's second cell: drawn with the first) */
             int px = cx + x * CW, py = cy + y * CH;
+            int wide = x + 1 < max_cols && gfx_char_cols(c ? c : ' ') == 2;
             if (gpu) {                                  /* the card puts it there: its tile drawn once */
-                if (!trv_has(key)) {
+                uint64_t key2 = key | 1ull << 40;       /* (a wide one: its right half a tile of its own) */
+                if (!trv_has(key) || (wide && !trv_has(key2))) {
                     cell_draw(px, py, CW, CH, c, color, sel, h, cur);
                     if (!trv_upload(key, bb + py * stride_px + px, stride_px)) goto gpu_failed;
+                    if (wide && !trv_upload(key2, bb + py * stride_px + px + CW, stride_px)) goto gpu_failed;
                 }
-                if (!trv_cell(key, px, py)) goto gpu_failed;
+                if (!trv_cell(key, px, py) || (wide && !trv_cell(key2, px + CW, py))) goto gpu_failed;
                 if (px < x0) x0 = px;
                 if (py < y0) y0 = py;
-                if (px + CW > x1) x1 = px + CW;
+                if (px + CW * (wide ? 2 : 1) > x1) x1 = px + CW * (wide ? 2 : 1);
                 if (py + CH > y1) y1 = py + CH;
                 continue;
             }
@@ -1070,11 +1106,11 @@ static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
     int pad = 6;
 
     int active = (g_term_order[TERM_WIN_MAX - 1] >= 0) && (&g_terms[g_term_order[TERM_WIN_MAX - 1]] == win);
-    uint32_t frame = active ? 0x001A1E24u : 0x0013151Au;
-    uint32_t body = active ? 0x00262A31u : 0x00202429u;
-    uint32_t title = active ? 0x003C4B66u : 0x00273140u;
-    uint32_t title_hi = active ? 0x006B7892u : 0x004B5568u;
-    uint32_t title_lo = active ? 0x00111824u : 0x0010151Fu;
+    uint32_t frame = active ? TC(0x1A1E24) : TC(0x13151A);
+    uint32_t body = active ? TC(0x262A31) : TC(0x202429);
+    uint32_t title = active ? TC(0x3C4B66) : TC(0x273140);
+    uint32_t title_hi = active ? TC(0x6B7892) : TC(0x4B5568);
+    uint32_t title_lo = active ? TC(0x111824) : TC(0x10151F);
     if (terminal_vt_ringing(win->vt)) {         /* a BEL: the frame and title flash amber */
         frame = 0x00B07A18u;
         title = 0x00C8901Eu;
@@ -1083,17 +1119,17 @@ static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
     }
 
     /* frame + title (stronger Fluxbox-like bevel) */
-    draw_bevel_box(w.x, w.y, w.w, w.h, frame, 0x004A5466u, 0x000E1116u);
+    draw_bevel_box(w.x, w.y, w.w, w.h, frame, TC(0x4A5466), TC(0x0E1116));
     gfx_fill_rect(w.x + 2, w.y + 2, w.w - 4, w.h - 4, body);
     draw_bevel_box(w.x + 3, w.y + 3, w.w - 6, title_h - 1, title, title_hi, title_lo);
     /* the title a program set (ESC ] 0 ; ... BEL), else "Terminal": cut with "..." before the buttons */
     char name[96];
     const char* set = terminal_vt_title(win->vt);
-    kstrlcpy(name, set[0] ? set : "Terminal", sizeof(name) - 3);
+    kstrlcpy(name, set[0] ? set : _("Terminal"), sizeof(name) - 3);
     int fit = (w.w - 10 - 84) / 8, len = (int)strlen(name);
     if (fit < 4) fit = 4;
     if (u8_cols(name, len) > fit) memcpy(name + u8_byte_at(name, len, fit - 3), "...", 4);
-    gfx_draw_text(w.x + 10, w.y + 7, name, active ? 0x00F2F7FFu : 0x00CED8E6u, title);
+    gfx_draw_text(w.x + 10, w.y + 7, name, active ? TC(0xF2F7FF) : TC(0xCED8E6), title);
 
     /* minimize, maximize / restore, close */
     win_draw_button_row(w.x + w.w, w.y + 4, 12, 1, w.maxed);
@@ -1359,8 +1395,8 @@ static void cursor_bits(int x, int y, const char* const* rows, int n) {
     for (int r = 0; r < n; r++)
         for (int c = 0; rows[r][c]; c++) {
             char ch = rows[r][c];
-            if (ch == 'B') fb_putpixel_direct(x + c, y + r, 0x00000000u);
-            else if (ch == 'W') fb_putpixel_direct(x + c, y + r, 0x00FFFFFFu);
+            if (ch == 'B') fb_putpixel_direct(x + c, y + r, TC(0x000000));
+            else if (ch == 'W') fb_putpixel_direct(x + c, y + r, TC(0xFFFFFF));
         }
 }
 
@@ -1375,11 +1411,11 @@ static void draw_cursor_shape(int mx, int my, int shape) {
     if (shape == CUR_RESIZE) {
         for (int y = -1; y <= 15; y++)
             for (int x = -1; x <= 15; x++) {
-                if (resize_white(x, y)) { fb_putpixel_direct(mx - 7 + x, my - 7 + y, 0x00FFFFFFu); continue; }
+                if (resize_white(x, y)) { fb_putpixel_direct(mx - 7 + x, my - 7 + y, TC(0xFFFFFF)); continue; }
                 int edge = 0;
                 for (int dy = -1; dy <= 1 && !edge; dy++)
                     for (int dx = -1; dx <= 1; dx++) if (resize_white(x + dx, y + dy)) { edge = 1; break; }
-                if (edge) fb_putpixel_direct(mx - 7 + x, my - 7 + y, 0x00000000u);
+                if (edge) fb_putpixel_direct(mx - 7 + x, my - 7 + y, TC(0x000000));
             }
         return;
     }
@@ -1543,9 +1579,9 @@ static void win_title(int h, char* out, int cap) {
         for (int j = 0; j <= i; j++) if (g_terms[j].open) n++;
         const char* set = terminal_vt_title(g_terms[i].vt);
         if (set[0]) kstrlcpy(out, set, (size_t)cap);
-        else ksnprintf(out, (size_t)cap, "Terminal %d", n);
+        else ksnprintf(out, (size_t)cap, "%s %d", _("Terminal"), n);
     } else if (k == WK_APP) {
-        kstrlcpy(out, g_apps[i].title, (size_t)cap);
+        kstrlcpy(out, _(g_apps[i].title), (size_t)cap);
     } else {
         appwin_info(i, out, cap, NULL);
     }
@@ -1620,6 +1656,7 @@ static uint8_t  g_app_was_open[APP_COUNT];
 static uint8_t  g_awin_desk[APPWIN_MAX], g_awin_seen[APPWIN_MAX];
 static uint32_t g_desk_osd_until;                /* "Desktop 2" shows until then */
 static int      g_desk_osd;
+static char     g_osd_text[40];                   /* (another note than "Desktop 2": the keyboard layout) */
 
 static int z_open(int h) {
     int k = h >> 8, i = h & 0xFF;
@@ -1743,6 +1780,8 @@ static win_geom_t* app_geom(int a) {
     case APP_TASKMGR:   return taskmgr_geom();
     case APP_SETTINGS:  return settings_geom();
     case APP_INSTALLER: return installer_geom();
+    case APP_DEVMGR: return devmgr_geom();
+    case APP_DISKMGR: return diskmgr_geom();
     default:            return NULL;
     }
 }
@@ -1993,6 +2032,7 @@ typedef struct { int act; char app[PKG_NAME_MAX]; } pin_t;
 static pin_t g_pins[PIN_MAX];
 static int   g_npins = -1;                /* -1: not read yet */
 static int   g_tb_style;                  /* 0 icons and titles, 1 icons, 2 titles */
+static int   g_tb_desks = 1;              /* the virtual desktops' buttons shown */
 static void  pins_load(void);
 #define PINS_X    (START_X + START_W + 6)
 static void pins_draw(const fb_info_t* fi);
@@ -2001,7 +2041,11 @@ static int tb_x(void) { if (g_npins < 0) pins_load(); return PINS_X + g_npins * 
 #define TB_BTN_W  (g_tb_style == 1 ? 44 : 150)
 
 /* the network icon (kernel/nettray.c), left of the clock */
-static int net_icon_x(const fb_info_t* fi) { return (int)fi->width - 8 - 64 - 14 - NETTRAY_ICON_W; }
+#define CLK_W 80                          /* the clock: the time over the date */
+static int net_icon_x(const fb_info_t* fi) { return (int)fi->width - 8 - CLK_W - 14 - NETTRAY_ICON_W; }
+static int clock_at(const fb_info_t* fi, int mx, int my) {
+    return my >= (int)fi->height - BAR_H && mx >= (int)fi->width - 8 - CLK_W - 6;
+}
 static int net_icon_at(const fb_info_t* fi, int mx, int my) {
     int x = net_icon_x(fi), bar_y = (int)fi->height - BAR_H;
     return my >= bar_y && mx >= x - 4 && mx < x + NETTRAY_ICON_W + 2;
@@ -2015,11 +2059,12 @@ static int tray_x(const fb_info_t* fi) {
 
 /* the virtual desktops' switcher, left of the tray: a box a desktop */
 #define DSW_BOX 18
-#define DSW_W   (NDESK * (DSW_BOX + 2) + 10)
+#define DSW_W   (g_tb_desks ? NDESK * (DSW_BOX + 2) + 10 : 0)
 static int dsw_x(const fb_info_t* fi) { return tray_x(fi) - DSW_W; }
 
 static int desk_switch_at(const fb_info_t* fi, int mx, int my) {
     int bar_y = (int)fi->height - BAR_H, x0 = dsw_x(fi);
+    if (!g_tb_desks) return -1;
     if (my < bar_y + 4 || my >= bar_y + BAR_H - 4 || mx < x0) return -1;
     int d = (mx - x0) / (DSW_BOX + 2);
     return d < NDESK && (mx - x0) % (DSW_BOX + 2) < DSW_BOX ? d : -1;
@@ -2028,14 +2073,15 @@ static int desk_switch_at(const fb_info_t* fi, int mx, int my) {
 static int desk_count(int d);
 
 static void draw_desk_switcher(const fb_info_t* fi) {
+    if (!g_tb_desks) return;                   /* (hidden: Settings > Taskbar) */
     int bar_y = (int)fi->height - BAR_H, x0 = dsw_x(fi);
     for (int d = 0; d < NDESK; d++) {
         int x = x0 + d * (DSW_BOX + 2), y = bar_y + 5, cur = d == g_cur_desk;
-        uint32_t base = cur ? 0x00405478u : 0x00262D38u;
-        draw_bevel_box(x, y, DSW_BOX, BAR_H - 10, base, cur ? 0x00222A36u : 0x00434D5Eu, cur ? 0x006B7892u : 0x0015191Fu);
+        uint32_t base = cur ? TC(0x405478) : TC(0x262D38);
+        draw_bevel_box(x, y, DSW_BOX, BAR_H - 10, base, cur ? TC(0x222A36) : TC(0x434D5E), cur ? TC(0x6B7892) : TC(0x15191F));
         char t[2] = { (char)('1' + d), 0 };
-        gfx_draw_text(x + 5, y + 5, t, cur ? 0x00FFFFFFu : 0x009AA6B6u, base);
-        if (desk_count(d)) gfx_fill_rect(x + DSW_BOX / 2 - 2, y + BAR_H - 13, 4, 2, cur ? 0x0068A8F0u : 0x00808C9Cu);
+        gfx_draw_text(x + 5, y + 5, t, cur ? TC(0xFFFFFF) : TC(0x9AA6B6), base);
+        if (desk_count(d)) gfx_fill_rect(x + DSW_BOX / 2 - 2, y + BAR_H - 13, 4, 2, cur ? TC(0x68A8F0) : TC(0x808C9C));
     }
 }
 
@@ -2067,6 +2113,8 @@ static void draw_win_glyph(int h, int x, int y, uint32_t bg) {
         else if (i == APP_LAUNCHER) draw_icon_apps(x, y, bg);
         else if (i == APP_SETTINGS) draw_icon_settings(x, y, bg);
         else if (i == APP_INSTALLER) draw_icon_install(x, y, bg);
+        else if (i == APP_DEVMGR) draw_icon_devmgr(x, y, bg);
+        else if (i == APP_DISKMGR) draw_icon_diskmgr(x, y, bg);
         else draw_icon_taskmgr(x, y, bg);
         return;
     }
@@ -2075,7 +2123,7 @@ static void draw_win_glyph(int h, int x, int y, uint32_t bg) {
 
 static void draw_taskbar_fb(const fb_info_t* fi) {
     int bar_y = (int)fi->height - BAR_H;
-    draw_bevel_box(0, bar_y, (int)fi->width, BAR_H, 0x00192026u, 0x004F5A6Eu, 0x0010141Bu);
+    draw_bevel_box(0, bar_y, (int)fi->width, BAR_H, TC(0x192026), TC(0x4F5A6E), TC(0x10141B));
     /* Start: the orb */
     startmenu_draw_orb(START_X, bar_y, BAR_H, g_menu_open, g_start_hover);
     /* the pinned apps */
@@ -2086,8 +2134,8 @@ static void draw_taskbar_fb(const fb_info_t* fi) {
         int h = g_tb[j];
         int x = TB_X + j * bw;
         int active = h == front, min = win_minimized(h);
-        uint32_t base = active ? 0x00405478u : min ? 0x00222831u : 0x00303740u;
-        uint32_t hi = active ? 0x00222A36u : 0x00535D6Eu, lo = active ? 0x006B7892u : 0x0015191Fu;
+        uint32_t base = active ? TC(0x405478) : min ? TC(0x222831) : TC(0x303740);
+        uint32_t hi = active ? TC(0x222A36) : TC(0x535D6E), lo = active ? TC(0x6B7892) : TC(0x15191F);
         draw_bevel_box(x, bar_y + 3, bw - 4, BAR_H - 6, base, hi, lo);
         if (g_tb_style == 1) {                         /* icons only */
             draw_win_glyph(h, x + (bw - 4 - 14) / 2, bar_y + 8, base);
@@ -2101,30 +2149,54 @@ static void draw_taskbar_fb(const fb_info_t* fi) {
         int maxc = (x + bw - 8 - tx) / 8;
         if (maxc < 1) continue;
         if ((int)strlen(t) > maxc) { t[maxc] = 0; if (maxc > 1) t[maxc - 1] = '.'; }
-        gfx_draw_text(tx, bar_y + 10, t, min ? 0x009AA6B6u : 0x00E8EEF6u, base);
+        gfx_draw_text(tx, bar_y + 10, t, min ? TC(0x9AA6B6) : TC(0xE8EEF6), base);
     }
     draw_desk_switcher(fi);
     /* tray: network, clock */
     char clk[9];
     format_clock(clk);
-    int clk_x = (int)fi->width - 8 - 64;
-    gfx_fill_rect(clk_x - 10, bar_y + 6, 1, BAR_H - 12, 0x004F5A6Eu);
-    gfx_draw_text(clk_x, bar_y + 10, clk, 0x00E8EEF6u, 0x00192026u);
+    int clk_x = (int)fi->width - 8 - CLK_W;
+    uint32_t cbg = cal_is_open() ? TC(0x303A48) : TC(0x192026);
+    gfx_fill_rect(clk_x - 10, bar_y + 6, 1, BAR_H - 12, TC(0x4F5A6E));
+    if (cal_is_open()) gfx_fill_rect(clk_x - 6, bar_y + 2, CLK_W + 10, BAR_H - 4, cbg);
+    {   /* the time over the date (a click opens the calendar): both placed by
+         * the font's own height and kept inside the taskbar, whatever the font */
+        rtc_datetime_t dt;
+        char d[16];
+        if (rtc_read_datetime(&dt) == 0) ksnprintf(d, sizeof(d), "%02u/%02u/%04u", dt.day, dt.month, dt.year);
+        else d[0] = 0;
+        int stride, tw, th;
+        uint32_t* t = fb_target(&stride, &tw, &th);
+        int face = font_available(FONT_SANS) ? FONT_SANS : -1;
+        if (t && face >= 0) {
+            int px = 12, a, dd, lh;
+            font_metrics(face, px, &a, &dd, &lh);
+            while (px > 8 && 2 * (a + dd) > BAR_H - 2) { px--; font_metrics(face, px, &a, &dd, &lh); }
+            int top = bar_y + (BAR_H - 2 * (a + dd)) / 2;
+            int w1 = font_text_width(face, px, clk, (uint32_t)strlen(clk)), w2 = font_text_width(face, px, d, (uint32_t)strlen(d));
+            int cx = clk_x + CLK_W / 2;
+            font_draw(t, stride, clk_x - 6, bar_y + 1, clk_x + CLK_W + 4, bar_y + BAR_H - 1, face, px, cx - w1 / 2, top + a, clk, (uint32_t)strlen(clk), TC(0xE8EEF6), 0);
+            font_draw(t, stride, clk_x - 6, bar_y + 1, clk_x + CLK_W + 4, bar_y + BAR_H - 1, face, px, cx - w2 / 2, top + 2 * a + dd, d, (uint32_t)strlen(d), TC(0xB8C2D0), 0);
+        } else {
+            gfx_draw_text(clk_x + (CLK_W - 64) / 2, bar_y + 5, clk, TC(0xE8EEF6), cbg);
+            gfx_draw_text(clk_x, bar_y + 16, d, TC(0xB8C2D0), cbg);
+        }
+    }
     int net_x = net_icon_x(fi);
-    nettray_draw_icon(net_x, bar_y + (BAR_H - 16) / 2, 0x00192026u, g_net_hover || nettray_is_open());
+    nettray_draw_icon(net_x, bar_y + (BAR_H - 16) / 2, TC(0x192026), g_net_hover || nettray_is_open());
     if (g_net_hover && !nettray_is_open()) {          /* its tooltip: the state in words */
         char tip[64];
         nettray_summary(tip, sizeof(tip));
         int tw = (int)strlen(tip) * 8 + 12, tx = net_x + NETTRAY_ICON_W - tw;
         if (tx < 4) tx = 4;
-        draw_bevel_box(tx, bar_y - 26, tw, 22, 0x001D232Cu, 0x00505E74u, 0x0010151Du);
-        gfx_draw_text(tx + 6, bar_y - 22, tip, 0x00E8EEF6u, 0x001D232Cu);
+        draw_bevel_box(tx, bar_y - 26, tw, 22, TC(0x1D232C), TC(0x505E74), TC(0x10151D));
+        gfx_draw_text(tx + 6, bar_y - 22, tip, TC(0xE8EEF6), TC(0x1D232C));
     }
     /* started from the CD: say so (nothing is kept unless installed) */
     if (sysinfo_live_boot()) {
         int bx = net_x - 14 - 7 * 8 - 8;
-        gfx_fill_rect(bx, bar_y + 5, 7 * 8 + 8, BAR_H - 10, 0x00D9822Bu);
-        gfx_draw_text(bx + 4, bar_y + 10, "LIVE CD", 0x00FFFFFFu, 0x00D9822Bu);
+        gfx_fill_rect(bx, bar_y + 5, 7 * 8 + 8, BAR_H - 10, TC(0xD9822B));
+        gfx_draw_text(bx + 4, bar_y + 10, _("LIVE CD"), TC(0xFFFFFF), TC(0xD9822B));
     }
 }
 
@@ -2168,7 +2240,7 @@ static void capture_view(gui_view_t* v, uint32_t sec) {
     v->sec = sec;
     v->term_gen = terminal_generation() ^ termcolors_generation() * 0x9E3779B1u;
     v->tb_gen_render = termrender_generation();
-    v->wp_gen = wallpaper_generation();
+    v->wp_gen = wallpaper_generation() ^ theme_generation() * 2654435761u ^ i18n_generation() * 40503u;   /* (a new theme: everything again) */
     v->net_state = (net_if()->configured ? net_if()->ip : 1) ^ nettray_sig();
     v->front_app = g_front_app;
     for (int a = 0; a < APP_COUNT; a++) {
@@ -2388,14 +2460,14 @@ static void desk_refresh(int force) {
     if (!force && g_ndesk && timer_ms() - g_desk_checked < 2000) return;
     g_desk_checked = timer_ms();
     g_ndesk = 0;
-    desk_add(ACT_TERMINAL, "Terminal", NULL);
-    desk_add(ACT_FILES, "Files", NULL);
-    desk_add(ACT_BROWSER, "Browser", NULL);
-    desk_add(ACT_NOTEPAD, "Notepad", NULL);
-    desk_add(ACT_APPS, "Apps", NULL);
-    desk_add(ACT_TASKMGR, "Task Manager", NULL);
-    desk_add(ACT_SETTINGS, "Settings", NULL);
-    if (installer_available()) desk_add(ACT_INSTALL, "Install Banana OS", NULL);
+    desk_add(ACT_TERMINAL, _("Terminal"), NULL);
+    desk_add(ACT_FILES, _("Files"), NULL);
+    desk_add(ACT_BROWSER, _("Browser"), NULL);
+    desk_add(ACT_NOTEPAD, _("Notepad"), NULL);
+    desk_add(ACT_APPS, _("Apps"), NULL);
+    desk_add(ACT_TASKMGR, _("Task Manager"), NULL);
+    desk_add(ACT_SETTINGS, _("Settings"), NULL);
+    if (installer_available()) desk_add(ACT_INSTALL, _("Install Banana OS"), NULL);
     int n = pkg_list(g_pkgs, DESK_MAX);
     for (int i = 0; i < n && i < DESK_MAX; i++)
         desk_add(ACT_RUN_APP, g_pkgs[i].title[0] ? g_pkgs[i].title : g_pkgs[i].name, g_pkgs[i].name);
@@ -2488,12 +2560,12 @@ static void desk_link_icon(const desk_item_t* d, int x, int y) {
         fileicon_draw(d->link == SC_DIR ? FI_FOLDER : fileicon_for_name(b ? b + 1 : d->target), ix, iy, 32);
     }
     int ax = ix, ay = iy + 20;                       /* the arrow: white box, a blue arrow up and right */
-    gfx_fill_rect(ax, ay, 12, 12, 0x00FFFFFFu);
-    gfx_fill_rect(ax, ay, 12, 1, 0x00808080u); gfx_fill_rect(ax, ay + 11, 12, 1, 0x00808080u);
-    gfx_fill_rect(ax, ay, 1, 12, 0x00808080u); gfx_fill_rect(ax + 11, ay, 1, 12, 0x00808080u);
-    for (int i = 0; i < 6; i++) gfx_fill_rect(ax + 3 + i, ay + 8 - i, 2, 2, 0x001A5FC8u);   /* the shaft */
-    gfx_fill_rect(ax + 5, ay + 2, 5, 2, 0x001A5FC8u);                                    /* the head */
-    gfx_fill_rect(ax + 8, ay + 2, 2, 5, 0x001A5FC8u);
+    gfx_fill_rect(ax, ay, 12, 12, TC(0xFFFFFF));
+    gfx_fill_rect(ax, ay, 12, 1, TC(0x808080)); gfx_fill_rect(ax, ay + 11, 12, 1, TC(0x808080));
+    gfx_fill_rect(ax, ay, 1, 12, TC(0x808080)); gfx_fill_rect(ax + 11, ay, 1, 12, TC(0x808080));
+    for (int i = 0; i < 6; i++) gfx_fill_rect(ax + 3 + i, ay + 8 - i, 2, 2, TC(0x1A5FC8));   /* the shaft */
+    gfx_fill_rect(ax + 5, ay + 2, 5, 2, TC(0x1A5FC8));                                    /* the head */
+    gfx_fill_rect(ax + 8, ay + 2, 2, 5, TC(0x1A5FC8));
 }
 
 static void draw_desktop_icons(const fb_info_t* fi) {
@@ -2503,7 +2575,7 @@ static void draw_desktop_icons(const fb_info_t* fi) {
         desk_cell(fi, i, &x, &y);
         if (x + CELL_W > (int)fi->width) continue;
         int sel = desk_marked(i) || i == g_desk_drop;
-        if (sel) gfx_fill_rect(x + (CELL_W - 36) / 2, y + 2, 36, 34, 0x00315A9Cu);   /* selected: tinted */
+        if (sel) gfx_fill_rect(x + (CELL_W - 36) / 2, y + 2, 36, 34, TC(0x315A9C));   /* selected: tinted */
         if (g_desk[i].link) desk_link_icon(&g_desk[i], x, y);
         else if (g_desk[i].kind == DK_APP) desk_icon(g_desk[i].act, x + (CELL_W - 28) / 2, y + 5, g_desk[i].app);
         else {
@@ -2511,7 +2583,7 @@ static void draw_desktop_icons(const fb_info_t* fi) {
                            g_desk[i].kind == DK_DIR ? FI_FOLDER : fileicon_for_name(g_desk[i].label);
             fileicon_draw(k, x + (CELL_W - 32) / 2, y + 3, 32);
         }
-        gfx_draw_label(x + CELL_W / 2, y + 40, CELL_W - 6, g_desk[i].label, 0x00FFFFFFu, sel ? 0x00315A9Cu : 0);
+        gfx_draw_label(x + CELL_W / 2, y + 40, CELL_W - 6, g_desk[i].label, TC(0xFFFFFF), sel ? TC(0x315A9C) : 0);   /* (white on the wallpaper, whatever the theme) */
     }
     g_is = 1;
 }
@@ -2545,6 +2617,8 @@ static void sm_action(int sm) {
     case SM_NOTEPAD:  act = ACT_NOTEPAD; break;
     case SM_APPS:     act = ACT_APPS; break;
     case SM_TASKMGR:  act = ACT_TASKMGR; break;
+    case SM_DEVMGR:  act = ACT_DEVMGR; break;
+    case SM_DISKMGR: act = ACT_DISKMGR; break;
     case SM_SETTINGS: act = ACT_SETTINGS; break;
     case SM_INSTALL:  act = ACT_INSTALL; break;
     case SM_SHUTDOWN: act = ACT_SHUTDOWN; break;
@@ -2590,6 +2664,8 @@ static void sm_program_icon(int sm, const char* app, int x, int y, int big, uint
     case SM_NOTEPAD:  draw_icon_notepad(x, y, bg); break;
     case SM_APPS:     draw_icon_apps(x, y, bg); break;
     case SM_TASKMGR:  draw_icon_taskmgr(x, y, bg); break;
+    case SM_DEVMGR:  draw_icon_devmgr(x, y, bg); break;
+    case SM_DISKMGR: draw_icon_diskmgr(x, y, bg); break;
     case SM_SETTINGS: draw_icon_settings(x, y, bg); break;
     case SM_INSTALL:  draw_icon_install(x, y, bg); break;
     default:          g_app_icon_name = app ? app : ""; draw_icon_app(x, y, bg); break;
@@ -2911,13 +2987,13 @@ static void draw_volume_osd(const fb_info_t* fi) {
     if (!g_osd_shown) return;
     int w = 220, h = 54, x = ((int)fi->width - w) / 2, y = (int)fi->height - BAR_H - h - 40;
     int v = audio_get_volume();
-    draw_bevel_box(x, y, w, h, 0x001D232Cu, 0x00505E74u, 0x0010151Du);
+    draw_bevel_box(x, y, w, h, TC(0x1D232C), TC(0x505E74), TC(0x10151D));
     char t[32];
     if (v == 0) kstrlcpy(t, "Sound off", sizeof(t));
     else ksnprintf(t, sizeof(t), "Volume %d%%", v);
-    gfx_draw_text(x + 14, y + 10, t, 0x00E8EEF6u, 0x001D232Cu);
-    gfx_fill_rect(x + 14, y + 30, w - 28, 10, 0x00303A4Au);
-    gfx_fill_rect(x + 14, y + 30, (w - 28) * v / 100, 10, 0x0068A8F0u);
+    gfx_draw_text(x + 14, y + 10, t, TC(0xE8EEF6), TC(0x1D232C));
+    gfx_fill_rect(x + 14, y + 30, w - 28, 10, TC(0x303A4A));
+    gfx_fill_rect(x + 14, y + 30, (w - 28) * v / 100, 10, TC(0x68A8F0));
 }
 
 static void render_desktop(const fb_info_t* fi, int mx, int my) {
@@ -2957,22 +3033,26 @@ static void render_desktop(const fb_info_t* fi, int mx, int my) {
     {
         win_rect_t r;
         if (winframe_preview(&r)) {
-            winframe_tint(r.x + 4, r.y + 4, r.w - 8, r.h - 8, 0x003A7BD5u, 70);
-            gfx_fill_rect(r.x + 4, r.y + 4, r.w - 8, 2, 0x0068A8F0u);
-            gfx_fill_rect(r.x + 4, r.y + r.h - 6, r.w - 8, 2, 0x0068A8F0u);
-            gfx_fill_rect(r.x + 4, r.y + 4, 2, r.h - 8, 0x0068A8F0u);
-            gfx_fill_rect(r.x + r.w - 6, r.y + 4, 2, r.h - 8, 0x0068A8F0u);
+            winframe_tint(r.x + 4, r.y + 4, r.w - 8, r.h - 8, TC(0x3A7BD5), 70);
+            gfx_fill_rect(r.x + 4, r.y + 4, r.w - 8, 2, TC(0x68A8F0));
+            gfx_fill_rect(r.x + 4, r.y + r.h - 6, r.w - 8, 2, TC(0x68A8F0));
+            gfx_fill_rect(r.x + 4, r.y + 4, 2, r.h - 8, TC(0x68A8F0));
+            gfx_fill_rect(r.x + r.w - 6, r.y + 4, 2, r.h - 8, TC(0x68A8F0));
         }
     }
 
     draw_taskbar_fb(fi);
     nettray_draw();                                 /* the network panel, over the windows */
+    cal_draw();                                     /* the calendar (a click on the clock) */
     if (g_desk_osd) {                               /* "Desktop 2", after switching */
-        char t[24];
-        ksnprintf(t, sizeof(t), "Desktop %d", g_cur_desk + 1);
-        int w = 180, h = 44, x = ((int)fi->width - w) / 2, y = ((int)fi->height - BAR_H) / 2 - h / 2;
-        draw_bevel_box(x, y, w, h, 0x001D232Cu, 0x00505E74u, 0x0010151Du);
-        gfx_draw_text_scaled(x + (w - (int)strlen(t) * 16) / 2, y + 14, 2, t, 0x00E8EEF6u, 0x001D232Cu);
+        char t[40];
+        if (g_osd_text[0]) kstrlcpy(t, g_osd_text, sizeof(t));
+        else ksnprintf(t, sizeof(t), "Desktop %d", g_cur_desk + 1);
+        int w = (int)strlen(t) * 16 + 40, h = 44;
+        if (w < 180) w = 180;
+        int x = ((int)fi->width - w) / 2, y = ((int)fi->height - BAR_H) / 2 - h / 2;
+        draw_bevel_box(x, y, w, h, TC(0x1D232C), TC(0x505E74), TC(0x10151D));
+        gfx_draw_text_scaled(x + (w - (int)strlen(t) * 16) / 2, y + 14, 2, t, TC(0xE8EEF6), TC(0x1D232C));
     }
 
     /* the Start menu */
@@ -3046,23 +3126,23 @@ static void ask_draw(const fb_info_t* fi) {
     if (!g_ask.open) return;
     int w = 460, h = 178, x = ((int)fi->width - w) / 2, y = ((int)fi->height - BAR_H - h) / 2;
     g_ask.x = x; g_ask.y = y; g_ask.w = w; g_ask.h = h;
-    gfx_fill_rect(x + 5, y + 5, w, h, 0x00080A0Eu);
-    draw_bevel_box(x, y, w, h, 0x001D232Cu, 0x00505E74u, 0x0010151Du);
-    gfx_fill_rect(x + 1, y + 1, w - 2, 24, 0x00304868u);
-    gfx_draw_text(x + 10, y + 5, g_ask.title, 0x00FFFFFFu, 0x00304868u);
-    gfx_draw_text(x + 14, y + 36, g_ask.prompt, 0x00E8EEF6u, 0x001D232Cu);
-    gfx_fill_rect(x + 14, y + 58, w - 28, 24, 0x00FFFFFFu);             /* the field */
-    gfx_fill_rect(x + 14, y + 81, w - 28, 1, 0x001A73E8u);
+    gfx_fill_rect(x + 5, y + 5, w, h, TC(0x080A0E));
+    draw_bevel_box(x, y, w, h, TC(0x1D232C), TC(0x505E74), TC(0x10151D));
+    gfx_fill_rect(x + 1, y + 1, w - 2, 24, TC(0x304868));
+    gfx_draw_text(x + 10, y + 5, g_ask.title, TC(0xFFFFFF), TC(0x304868));
+    gfx_draw_text(x + 14, y + 36, g_ask.prompt, TC(0xE8EEF6), TC(0x1D232C));
+    gfx_fill_rect(x + 14, y + 58, w - 28, 24, TC(0xFFFFFF));             /* the field */
+    gfx_fill_rect(x + 14, y + 81, w - 28, 1, TC(0x1A73E8));
     int maxc = (w - 40) / 8, n = (int)strlen(g_ask.text);
     const char* shown = g_ask.text + (n > maxc - 1 ? n - (maxc - 1) : 0);  /* (its end, while typing) */
-    gfx_draw_text(x + 20, y + 63, shown, 0x00101010u, 0x00FFFFFFu);
-    gfx_fill_rect(x + 20 + (int)strlen(shown) * 8, y + 62, 1, 14, 0x00202020u);
-    gfx_draw_text(x + 14, y + 90, g_ask.hint, 0x009AA6B6u, 0x001D232Cu);
-    if (g_ask.err[0]) gfx_draw_text(x + 14, y + 112, g_ask.err, 0x00F08070u, 0x001D232Cu);
-    draw_bevel_box(x + w - 186, y + h - 36, 80, 24, 0x00405478u, 0x006B7892u, 0x00222A36u);
-    gfx_draw_text(x + w - 186 + 32, y + h - 31, "OK", 0x00FFFFFFu, 0x00405478u);
-    draw_bevel_box(x + w - 96, y + h - 36, 80, 24, 0x00303740u, 0x00535D6Eu, 0x0015191Fu);
-    gfx_draw_text(x + w - 96 + 16, y + h - 31, "Cancel", 0x00E8EEF6u, 0x00303740u);
+    gfx_draw_text(x + 20, y + 63, shown, TC(0x101010), TC(0xFFFFFF));
+    gfx_fill_rect(x + 20 + (int)strlen(shown) * 8, y + 62, 1, 14, TC(0x202020));
+    gfx_draw_text(x + 14, y + 90, g_ask.hint, TC(0x9AA6B6), TC(0x1D232C));
+    if (g_ask.err[0]) gfx_draw_text(x + 14, y + 112, g_ask.err, TC(0xF08070), TC(0x1D232C));
+    draw_bevel_box(x + w - 186, y + h - 36, 80, 24, TC(0x405478), TC(0x6B7892), TC(0x222A36));
+    gfx_draw_text(x + w - 186 + 32, y + h - 31, _("OK"), TC(0xFFFFFF), TC(0x405478));
+    draw_bevel_box(x + w - 96, y + h - 36, 80, 24, TC(0x303740), TC(0x535D6E), TC(0x15191F));
+    gfx_draw_text(x + w - 96 + 16, y + h - 31, _("Cancel"), TC(0xE8EEF6), TC(0x303740));
 }
 
 /* a click while it is open (it takes every click) */
@@ -3095,7 +3175,7 @@ static void desktop_menu_cb(int id, void* arg) {
     case DM_NEWFOLDER: desk_new(1); break;
     case DM_NEWFILE: desk_new(0); break;
     case DM_NEWLINK:
-        ask_open("Create shortcut", "What should the shortcut open?",
+        ask_open(_("Create shortcut"), "What should the shortcut open?",
                  "e.g. Notepad, example.com or ~/Music", new_shortcut_done);
         break;
     case DM_UNHIDE: g_nhidden = 0; hidden_save(); desk_refresh(1); break;
@@ -3110,24 +3190,26 @@ static void desktop_menu_cb(int id, void* arg) {
 static void open_desktop_menu(int mx, int my) {
     if (g_nhidden < 0) hidden_load();
     ctx_item_t items[] = {
-        { "New folder", DM_NEWFOLDER, 0 },
-        { "New text document", DM_NEWFILE, 0 },
-        { "New shortcut...", DM_NEWLINK, 0 },
-        { "Paste", DM_PASTE, fileops_clip_count() == 0 },
+        { _("New folder"), DM_NEWFOLDER, 0 },
+        { _("New text document"), DM_NEWFILE, 0 },
+        { _("New shortcut..."), DM_NEWLINK, 0 },
+        { _("Paste"), DM_PASTE, fileops_clip_count() == 0 },
         { CTX_SEP, 0, 0 },
-        { "Arrange icons", DM_ARRANGE, 0 },
-        { "Restore removed icons", DM_UNHIDE, g_nhidden == 0 },
-        { "Refresh", DM_REFRESH, 0 },
-        { "Open the Desktop folder", DM_OPENDIR, 0 },
+        { _("Arrange icons"), DM_ARRANGE, 0 },
+        { _("Restore removed icons"), DM_UNHIDE, g_nhidden == 0 },
+        { _("Refresh"), DM_REFRESH, 0 },
+        { _("Open the Desktop folder"), DM_OPENDIR, 0 },
         { CTX_SEP, 0, 0 },
-        { "Terminal", ACT_TERMINAL, 0 },
-        { "Files", ACT_FILES, 0 },
-        { "Task Manager", ACT_TASKMGR, 0 },
-        { "Change wallpaper...", ACT_WALLPAPER, 0 },
-        { "About Banana OS", ACT_ABOUT, 0 },
+        { _("Terminal"), ACT_TERMINAL, 0 },
+        { _("Files"), ACT_FILES, 0 },
+        { _("Task Manager"), ACT_TASKMGR, 0 },
+        { _("Device Manager"), ACT_DEVMGR, 0 },
+        { _("Disk Management"), ACT_DISKMGR, 0 },
+        { _("Change wallpaper..."), ACT_WALLPAPER, 0 },
+        { _("About Banana OS"), ACT_ABOUT, 0 },
         { CTX_SEP, 0, 0 },
-        { "Lock screen", ACT_LOCK, 0 },
-        { "Exit to shell", ACT_QUIT, 0 },
+        { _("Lock screen"), ACT_LOCK, 0 },
+        { _("Exit to shell"), ACT_QUIT, 0 },
     };
     ctxmenu_open(mx, my, items, (int)(sizeof(items) / sizeof(items[0])), desktop_menu_cb, NULL);
 }
@@ -3206,7 +3288,7 @@ static void open_icon_menu(int i, int mx, int my) {
 
 /* taskbar: Task Manager & co, or one window's button */
 enum { TBM_TASKMGR = 1, TBM_SHOW_DESKTOP, TBM_RESTORE_ALL, TBM_RESTORE, TBM_MINIMIZE, TBM_CLOSE, TBM_QUIT, TBM_TERMINAL, TBM_LOCK,
-       TBM_PIN, TBM_UNPIN, TBM_PIN_OPEN, TBM_SETTINGS };
+       TBM_PIN, TBM_UNPIN, TBM_PIN_OPEN, TBM_SETTINGS, TBM_DESKS };
 static int g_tbmenu_win, g_tbmenu_pin = -1;
 static int  win_pin_target(int h, int* act, char* app, int cap);
 static int  pin_at(int mx, int my);
@@ -3232,6 +3314,7 @@ static void taskbar_menu_cb(int id, void* arg) {
     }
     case TBM_UNPIN: if (g_tbmenu_pin >= 0) pin_remove(g_tbmenu_pin); break;
     case TBM_PIN_OPEN: if (g_tbmenu_pin >= 0) pin_open(g_tbmenu_pin); break;
+    case TBM_DESKS: gui_set_taskbar_desks(!g_tb_desks); break;
     case TBM_SETTINGS: settings_open_page(SETTINGS_PAGE_TASKBAR); g_app_min[APP_SETTINGS] = 0; raise_app(APP_SETTINGS); break;
     }
 }
@@ -3241,9 +3324,9 @@ static void open_taskbar_menu(const fb_info_t* fi, int mx, int my) {
     if (p >= 0) {
         g_tbmenu_pin = p;
         ctx_item_t items[] = {
-            { "Open", TBM_PIN_OPEN, 0 },
+            { _("Open"), TBM_PIN_OPEN, 0 },
             { CTX_SEP, 0, 0 },
-            { "Unpin from taskbar", TBM_UNPIN, 0 },
+            { _("Unpin from taskbar"), TBM_UNPIN, 0 },
         };
         ctxmenu_open(mx, my, items, 3, taskbar_menu_cb, NULL);
         return;
@@ -3258,28 +3341,29 @@ static void open_taskbar_menu(const fb_info_t* fi, int mx, int my) {
         int pinned = can && pin_find(act, app) >= 0;
         g_tbmenu_pin = pinned ? pin_find(act, app) : -1;
         ctx_item_t items[] = {
-            { "Restore", TBM_RESTORE, !min && win_front() == g_tbmenu_win },
-            { "Minimize", TBM_MINIMIZE, min },
+            { _("Restore"), TBM_RESTORE, !min && win_front() == g_tbmenu_win },
+            { _("Minimize"), TBM_MINIMIZE, min },
             { CTX_SEP, 0, 0 },
             { pinned ? "Unpin from taskbar" : "Pin to taskbar", pinned ? TBM_UNPIN : TBM_PIN, !can },
             { CTX_SEP, 0, 0 },
-            { "Close window", TBM_CLOSE, 0 },
+            { _("Close window"), TBM_CLOSE, 0 },
             { CTX_SEP, 0, 0 },
-            { "Task Manager", TBM_TASKMGR, 0 },
+            { _("Task Manager"), TBM_TASKMGR, 0 },
         };
         ctxmenu_open(mx, my, items, 8, taskbar_menu_cb, NULL);
         return;
     }
     ctx_item_t items[] = {
-        { "Task Manager", TBM_TASKMGR, 0 },
+        { _("Task Manager"), TBM_TASKMGR, 0 },
         { CTX_SEP, 0, 0 },
-        { "Show the desktop", TBM_SHOW_DESKTOP, g_ntb == 0 },
-        { "Restore all windows", TBM_RESTORE_ALL, g_ntb == 0 },
+        { _("Show the desktop"), TBM_SHOW_DESKTOP, g_ntb == 0 },
+        { _("Restore all windows"), TBM_RESTORE_ALL, g_ntb == 0 },
         { CTX_SEP, 0, 0 },
-        { "New terminal", TBM_TERMINAL, 0 },
-        { "Taskbar settings", TBM_SETTINGS, 0 },
-        { "Lock screen", TBM_LOCK, 0 },
-        { "Exit to shell", TBM_QUIT, 0 },
+        { _("New terminal"), TBM_TERMINAL, 0 },
+        { g_tb_desks ? "Hide desktop buttons" : "Show desktop buttons", TBM_DESKS, 0 },
+        { _("Taskbar settings"), TBM_SETTINGS, 0 },
+        { _("Lock screen"), TBM_LOCK, 0 },
+        { _("Exit to shell"), TBM_QUIT, 0 },
     };
     ctxmenu_open(mx, my, items, (int)(sizeof(items) / sizeof(items[0])), taskbar_menu_cb, NULL);
 }
@@ -3356,16 +3440,16 @@ static void open_term_menu(int wi, int mx, int my) {
     uint32_t n;
     clipboard_get(&n);
     ctx_item_t items[] = {
-        { "Copy", TM_COPY, !g_terms[wi].sel },
-        { "Paste", TM_PASTE, n == 0 },
-        { "Clear", TM_CLEAR, 0 },
-        { "Colours...", TM_COLORS, 0 },
-        { "Rendering...", TM_RENDER, 0 },
+        { _("Copy"), TM_COPY, !g_terms[wi].sel },
+        { _("Paste"), TM_PASTE, n == 0 },
+        { _("Clear"), TM_CLEAR, 0 },
+        { _("Colours..."), TM_COLORS, 0 },
+        { _("Rendering..."), TM_RENDER, 0 },
         { CTX_SEP, 0, 0 },
-        { "New terminal", TM_NEW, 0 },
-        { "New tab", TM_NEWTAB, g_terms[wi].ntabs >= TERM_TABS },
-        { "Minimize", TM_MINIMIZE, 0 },
-        { "Close", TM_CLOSE, 0 },
+        { _("New terminal"), TM_NEW, 0 },
+        { _("New tab"), TM_NEWTAB, g_terms[wi].ntabs >= TERM_TABS },
+        { _("Minimize"), TM_MINIMIZE, 0 },
+        { _("Close"), TM_CLOSE, 0 },
     };
     ctxmenu_open(mx, my, items, (int)(sizeof(items) / sizeof(items[0])), term_menu_cb, NULL);
 }
@@ -3377,14 +3461,14 @@ static void notepad_rclick_menu(int mx, int my) {
     uint32_t n;
     clipboard_get(&n);
     ctx_item_t items[] = {
-        { "Cut", 24, 0 },
-        { "Copy", 3, 0 },
-        { "Paste", 22, n == 0 },
-        { "Select all", 1, 0 },
+        { _("Cut"), 24, 0 },
+        { _("Copy"), 3, 0 },
+        { _("Paste"), 22, n == 0 },
+        { _("Select all"), 1, 0 },
         { CTX_SEP, 0, 0 },
-        { "Find...", 6, 0 },
-        { "Open...", 15, 0 },
-        { "Save", 19, 0 },
+        { _("Find..."), 6, 0 },
+        { _("Open..."), 15, 0 },
+        { _("Save"), 19, 0 },
     };
     ctxmenu_open(mx, my, items, 8, notepad_menu_cb, NULL);
 }
@@ -3499,14 +3583,14 @@ static void gui_poll_body(void) {
         sync_taskbar();
         z_focus();                                      /* the keyboard: the top window shown */
         appwin_focus(g_front_app == APP_APPWIN);
-        if (g_desk_osd && (int32_t)(timer_ms() - g_desk_osd_until) >= 0) { g_desk_osd = 0; g_force_redraw = 1; }
+        if (g_desk_osd && (int32_t)(timer_ms() - g_desk_osd_until) >= 0) { g_desk_osd = 0; g_osd_text[0] = 0; g_force_redraw = 1; }
 
         /* Notepad and app windows have no keyboard task of their own:
          * while one is in front, keys are handed to it from here (Ctrl+T
          * and the Start menu first). Apps and Task Manager read no keys
          * (Esc closes them). */
         if (g_ask.open || gui_notepad_focused() || gui_appwin_focused() || (kb_modal() && g_front_app >= 0) ||
-            ((g_front_app == APP_LAUNCHER || g_front_app == APP_TASKMGR || g_front_app == APP_FILES || g_front_app == APP_SETTINGS || g_front_app == APP_INSTALLER) &&
+            ((g_front_app == APP_LAUNCHER || g_front_app == APP_TASKMGR || g_front_app == APP_FILES || g_front_app == APP_SETTINGS || g_front_app == APP_INSTALLER || g_front_app == APP_DEVMGR || g_front_app == APP_DISKMGR) &&
              app_visible(g_front_app) && tty_current() < 0)) {
             for (int k = 0; k < 64; k++) {
                 char c = keyboard_try_getchar();
@@ -3528,18 +3612,20 @@ static void gui_poll_body(void) {
                             char c3 = keyboard_try_getchar();
                             if (c3 >= '0' && c3 <= '9') keyboard_try_getchar();
                             code = c3 == 'A' ? KB_UP : c3 == 'B' ? KB_DOWN : c3 == 'C' ? KB_RIGHT : c3 == 'D' ? KB_LEFT :
-                                   c3 == 'H' ? KB_HOME : c3 == 'F' ? KB_END : c3 == 'P' ? KB_DEL : 0;
+                                   c3 == 'H' ? KB_HOME : c3 == 'F' ? KB_END : c3 == 'P' ? KB_DEL :
+                                   c3 == 'I' ? KB_PGUP : c3 == 'G' ? KB_PGDN : 0;
                         } else code = KB_ESC;
                     } else if (c == '\n') code = KB_ENTER;
                     else if (c == '\t') code = (keyboard_mods() & 1) ? KB_BACKTAB : KB_TAB;
                     else if (c == ' ') code = KB_SPACE;
                     else if (g_cb_open && c > ' ' && c < 127) code = c;
+                    else if (ep_is_open() && ((c > ' ' && c < 127) || c == '\b' || c == 127)) code = c;   /* (its search) */
                     if (code) kb_modal_key(code);
                     g_force_redraw = 1;
                     continue;
                 }
                 /* Settings, Task Manager, Apps: the focus moves between their controls */
-                if (!g_menu_open && (g_front_app == APP_SETTINGS || g_front_app == APP_TASKMGR || g_front_app == APP_LAUNCHER)) {
+                if (!g_menu_open && (g_front_app == APP_SETTINGS || g_front_app == APP_TASKMGR || g_front_app == APP_LAUNCHER || g_front_app == APP_DEVMGR || g_front_app == APP_DISKMGR)) {
                     int code = 0;
                     if (c == 27) {
                         char c2 = keyboard_try_getchar();
@@ -3560,11 +3646,14 @@ static void gui_poll_body(void) {
                     if (code) {
                         if (g_front_app == APP_SETTINGS) took = settings_navkey(code);
                         else if (g_front_app == APP_TASKMGR) took = taskmgr_navkey(code);
+                        else if (g_front_app == APP_DEVMGR) took = devmgr_navkey(code);
+                        else if (g_front_app == APP_DISKMGR) took = diskmgr_navkey(code);
                         else took = launcher_navkey(code);
                     }
                     if (!took) {
                         if (code == KB_ESC) c = 27;
                         if (g_front_app == APP_SETTINGS) settings_key(c);
+                        else if (g_front_app == APP_DISKMGR) diskmgr_key(c);      /* (its dialog's fields) */
                         else if (c == 27) g_apps[g_front_app].close();
                     }
                     g_force_redraw = 1;
@@ -3593,7 +3682,7 @@ static void gui_poll_body(void) {
         }
         gui_fkeys(fi);
         { static uint32_t cbg; if (g_cb_open && clipboard_hist_generation() != cbg) { cbg = clipboard_hist_generation(); g_force_redraw = 1; } }
-        appwin_focus(g_front_app==APP_APPWIN && !g_menu_open && !ctxmenu_is_open() && !g_cb_open && !g_tv_open && !g_sw_open && !g_bar_kb);
+        appwin_focus(g_front_app==APP_APPWIN && !g_menu_open && !ctxmenu_is_open() && !g_cb_open && !ep_is_open() && !g_tv_open && !g_sw_open && !g_bar_kb);
 
         if (!g_backbuf_active) {
             if (size_desktop(fi) < 0) {
@@ -3606,6 +3695,7 @@ static void gui_poll_body(void) {
             g_force_redraw = 1;
             /* the saved wallpaper (/etc/wallpaper) is applied on first use */
             wallpaper_load_config();
+            theme_init();                   /* the built-in and installed themes, the one chosen */
         }
 
         /* (the timer interrupt moves the pointer too: interrupts off while it changes here) */
@@ -3636,6 +3726,8 @@ static void gui_poll_body(void) {
         if (fl & 0x200) __asm__ volatile("sti" ::: "memory");
         if (ms.dz && g_cb_open && cb_wheel(fi, mx, my, ms.dz)) {
             g_force_redraw = 1;
+        } else if (ms.dz && ep_is_open() && ep_wheel(fi, BAR_H, mx, my, ms.dz)) {
+            g_force_redraw = 1;
         } else if (ms.dz && g_menu_open && startmenu_contains(fi, mx, my)) {
             startmenu_wheel(ms.dz);
         } else if (ms.dz) {
@@ -3663,6 +3755,7 @@ static void gui_poll_body(void) {
         prev_right = right;
         if(captured) { click=rclick=0;left=0; }
         if ((click || rclick) && g_cb_open) { if (click) cb_click(fi, mx, my); else g_cb_open = 0; g_force_redraw = 1; click = rclick = 0; }
+        if ((click || rclick) && ep_is_open()) { if (click) ep_click(fi, BAR_H, mx, my); else ep_close(); g_force_redraw = 1; click = rclick = 0; }
         /* task view / switcher / taskbar focus: a click picks a window or leaves */
         if ((click || rclick) && (g_tv_open || g_sw_open || g_bar_kb)) {
             if (click && g_tv_open) { int i = tv_card_at(fi, mx, my); if (i >= 0) tv_activate(i); }
@@ -3739,10 +3832,23 @@ static void gui_poll_body(void) {
             g_force_redraw = 1;
         }
 
+        /* the calendar: a click in it, or a click elsewhere closes it */
+        if ((click || rclick) && cal_is_open() && !clock_at(fi, mx, my)) {
+            if (click && cal_contains(mx, my)) { cal_click(mx, my); click = 0; }
+            else cal_close();
+            g_force_redraw = 1;
+        }
+
         if (click) {
             /* the taskbar: Start, a window's button */
             if (click && my >= bar_y) {
-                if (net_icon_at(fi, mx, my)) {
+                if (clock_at(fi, mx, my)) {
+                    cal_toggle((int)fi->width - 4, bar_y);
+                    nettray_close();
+                    g_menu_open = 0;
+                    g_force_redraw = 1;
+                } else if (net_icon_at(fi, mx, my)) {
+                    cal_close();
                     nettray_toggle(net_icon_x(fi) + NETTRAY_ICON_W + 4, bar_y);
                     g_menu_open = 0;
                     g_force_redraw = 1;
@@ -4045,7 +4151,7 @@ int gui_focused_vt(void) {
     if (g_front_app == APP_BROWSER && browser_is_open() && !g_app_min[APP_BROWSER]) return BROWSER_VT;
     if (g_front_app == APP_NOTEPAD && notepad_is_open() && !g_app_min[APP_NOTEPAD]) return NOTEPAD_VT;
     if (g_front_app == APP_APPWIN && appwin_any_visible()) return APPWIN_VT;
-    if ((g_front_app == APP_LAUNCHER || g_front_app == APP_TASKMGR || g_front_app == APP_FILES || g_front_app == APP_SETTINGS || g_front_app == APP_INSTALLER) && app_visible(g_front_app))
+    if ((g_front_app == APP_LAUNCHER || g_front_app == APP_TASKMGR || g_front_app == APP_FILES || g_front_app == APP_SETTINGS || g_front_app == APP_INSTALLER || g_front_app == APP_DEVMGR || g_front_app == APP_DISKMGR) && app_visible(g_front_app))
         return APPWIN_VT + 1;          /* keys handed out by gui_poll() */
 
     /* Frontmost OPEN window, if any - g_term_order always lists every
@@ -4107,6 +4213,8 @@ static void do_action(int act) {
     case ACT_NOTEPAD: notepad_open(NULL); g_app_min[APP_NOTEPAD] = 0; raise_app(APP_NOTEPAD); break;
     case ACT_APPS: launcher_open(); g_app_min[APP_LAUNCHER] = 0; raise_app(APP_LAUNCHER); break;
     case ACT_TASKMGR: taskmgr_open(); g_app_min[APP_TASKMGR] = 0; raise_app(APP_TASKMGR); break;
+    case ACT_DEVMGR: devmgr_open(); g_app_min[APP_DEVMGR] = 0; raise_app(APP_DEVMGR); break;
+    case ACT_DISKMGR: diskmgr_open(); g_app_min[APP_DISKMGR] = 0; raise_app(APP_DISKMGR); break;
     case ACT_SETTINGS: settings_open(); g_app_min[APP_SETTINGS] = 0; raise_app(APP_SETTINGS); break;
     case ACT_WALLPAPER: settings_open_page(SETTINGS_PAGE_DISPLAY); g_app_min[APP_SETTINGS] = 0; raise_app(APP_SETTINGS); break;
     case ACT_QUIT: gui_set_enabled(0); break;
@@ -4207,6 +4315,27 @@ int gui_open_settings_app(const char* name) {
     return 1;
 }
 
+/* Settings at one of its pages (SETTINGS_PAGE_*) */
+int gui_open_settings_page(int page) {
+    if (!gfx_available() || !g_gui_enabled) return 0;
+    settings_open_page(page);
+    g_app_min[APP_SETTINGS] = 0;
+    raise_app(APP_SETTINGS);
+    return 1;
+}
+
+int gui_open_diskmgr(void) {
+    if (!gfx_available() || !g_gui_enabled) return 0;
+    do_action(ACT_DISKMGR);
+    return 1;
+}
+
+int gui_open_devmgr(void) {
+    if (!gfx_available() || !g_gui_enabled) return 0;
+    do_action(ACT_DEVMGR);
+    return 1;
+}
+
 int gui_open_taskmgr(void) {
     if (!gfx_available() || !g_gui_enabled) return 0;
     do_action(ACT_TASKMGR);
@@ -4281,7 +4410,7 @@ int gui_handle_arrow(char esc_code) {
     if (gfx_available() && g_gui_enabled && !g_menu_open) {
         if (kb_modal()) {
             int code = esc_code == 'A' ? KB_UP : esc_code == 'B' ? KB_DOWN : esc_code == 'C' ? KB_RIGHT : esc_code == 'D' ? KB_LEFT :
-                       esc_code == 'H' ? KB_HOME : esc_code == 'F' ? KB_END : esc_code == 'P' ? KB_DEL : 0;
+                       esc_code == 'H' ? KB_HOME : esc_code == 'F' ? KB_END : esc_code == 'P' ? KB_DEL : esc_code == 'I' ? KB_PGUP : esc_code == 'G' ? KB_PGDN : 0;
             if (code) kb_modal_key(code);
             g_force_redraw = 1;
             return 1;
@@ -4309,6 +4438,7 @@ int gui_handle_key(char c) {
     if (gfx_available() && kb_modal() && !g_menu_open && c != 20) {
         int code = c == '\n' ? KB_ENTER : c == 27 ? KB_ESC : c == '\t' ? ((keyboard_mods() & 1) ? KB_BACKTAB : KB_TAB) : c == ' ' ? KB_SPACE : 0;
         if (!code && g_cb_open && c > ' ' && c < 127) code = c;
+        if (!code && ep_is_open() && ((c > ' ' && c < 127) || c == '\b' || c == 127)) code = c;
         if (code) kb_modal_key(code);
         g_force_redraw = 1;
         return 1;
@@ -4368,7 +4498,8 @@ int gui_handle_key(char c) {
  * arrows go through its icons, Enter opens); Win+T - the taskbar (arrows,
  * Enter); Win+E Files, Win+I Settings, Win+L lock, Win+R a terminal,
  * Win+M everything down, Win+1..9 the taskbar's windows, Win+Down / Up
- * minimize / bring back; Win+V the clipboard history; the Menu key
+ * minimize / bring back; Win+V the clipboard history; Win+. (or Win+;)
+ * the emoji panel (kernel/emojipick.c); the Menu key
  * (Shift+F10) - a right-click menu. */
 
 /* the windows in the order they were used, the front one first */
@@ -4393,7 +4524,7 @@ static void tv_card(const fb_info_t* fi, int i, int* x, int* y, int* w, int* h);
 static int tv_card_at(const fb_info_t* fi, int mx, int my);
 static void tv_activate(int sel);
 
-static int kb_modal(void) { return g_cb_open || g_sw_open || g_tv_open || g_bar_kb || ctxmenu_is_open(); }
+static int kb_modal(void) { return g_cb_open || ep_is_open() || cal_is_open() || g_sw_open || g_tv_open || g_bar_kb || ctxmenu_is_open(); }
 
 static void list_windows(void) {
     sync_taskbar();
@@ -4445,6 +4576,8 @@ static void tv_activate(int sel) {
 static int kb_modal_key(int code) {
     if (ctxmenu_is_open()) return ctxmenu_key(code);
     if (g_cb_open) return cb_key(code);
+    if (ep_is_open()) return ep_key(code);
+    if (cal_is_open()) return cal_key(code);
     if (g_sw_open) {
         if (code == KB_ESC) g_sw_open = 0;
         else if (code == KB_ENTER) { tv_activate(g_sw_sel); g_sw_open = 0; }
@@ -4544,7 +4677,18 @@ static int kb_global(int k) {
         else if (g_desk_sel < 0 && g_ndesk) g_desk_sel = 0;
         break;
     }
-    case 'v': cb_toggle(); break;
+    case 'v': ep_close(); cb_toggle(); break;
+    case ' ': {                                      /* Win+Space: English (US) and back */
+        kstrlcpy(g_osd_text, keyboard_toggle_layout(), sizeof(g_osd_text));
+        g_desk_osd = 1;
+        g_desk_osd_until = timer_ms() + 1200;
+        break;
+    }
+    case '.':
+    case ';':
+        g_cb_open = g_tv_open = g_sw_open = g_bar_kb = 0;
+        ep_toggle();
+        break;
     case 'm': for (int j = 0; j < g_ntb; j++) win_minimize(g_tb[j]); g_front_app = -1; break;
     case 'e': do_action(ACT_FILES); break;
     case 'i': do_action(ACT_SETTINGS); break;
@@ -4583,11 +4727,11 @@ static int kb_global(int k) {
 }
 
 static void kb_card(int x, int y, int w, int h, int handle, int sel, int big) {
-    uint32_t bg = sel ? 0x00405478u : 0x00262D38u;
-    draw_bevel_box(x, y, w, h, bg, sel ? 0x0090B8F0u : 0x00505E74u, 0x0010151Du);
+    uint32_t bg = sel ? TC(0x405478) : TC(0x262D38);
+    draw_bevel_box(x, y, w, h, bg, sel ? TC(0x90B8F0) : TC(0x505E74), TC(0x10151D));
     if (sel) {
-        gfx_fill_rect(x - 3, y - 3, w + 6, 3, 0x00FFD34Eu); gfx_fill_rect(x - 3, y + h, w + 6, 3, 0x00FFD34Eu);
-        gfx_fill_rect(x - 3, y - 3, 3, h + 6, 0x00FFD34Eu); gfx_fill_rect(x + w, y - 3, 3, h + 6, 0x00FFD34Eu);
+        gfx_fill_rect(x - 3, y - 3, w + 6, 3, TC(0xFFD34E)); gfx_fill_rect(x - 3, y + h, w + 6, 3, TC(0xFFD34E));
+        gfx_fill_rect(x - 3, y - 3, 3, h + 6, TC(0xFFD34E)); gfx_fill_rect(x + w, y - 3, 3, h + 6, TC(0xFFD34E));
     }
     int saved = g_is;
     g_is = big ? 2 : 1;
@@ -4597,8 +4741,8 @@ static void kb_card(int x, int y, int w, int h, int handle, int sel, int big) {
     win_title(handle, t, sizeof(t));
     int maxc = (w - 12) / 8;
     if (maxc > 0 && (int)strlen(t) > maxc) { t[maxc] = 0; if (maxc > 1) t[maxc - 1] = '.'; }
-    gfx_draw_text(x + (w - (int)strlen(t) * 8) / 2, y + h - (big ? 22 : 16), t, 0x00E8EEF6u, bg);
-    if (win_minimized(handle)) gfx_draw_text(x + (w - 9 * 8) / 2, y + h - 10, "minimized", 0x009AA6B6u, bg);
+    gfx_draw_text(x + (w - (int)strlen(t) * 8) / 2, y + h - (big ? 22 : 16), t, TC(0xE8EEF6), bg);
+    if (win_minimized(handle)) gfx_draw_text(x + (w - 9 * 8) / 2, y + h - 10, _("minimized"), TC(0x9AA6B6), bg);
 }
 
 /* ══ Win+V: the clipboard history ════════════════════════════════════
@@ -4610,9 +4754,9 @@ static void kb_card(int x, int y, int w, int h, int handle, int sel, int big) {
 #define CB_ROW_H   40
 #define CB_HEAD_H  34
 #define CB_FOOT_H  22
-#define CB_BG      0x001B212Bu
-#define CB_ROW     0x00262D38u
-#define CB_ROW_SEL 0x00405478u
+#define CB_BG      TC(0x1B212B)
+#define CB_ROW     TC(0x262D38)
+#define CB_ROW_SEL TC(0x405478)
 
 static void cb_geom(const fb_info_t* fi, int* px, int* py, int* pw, int* ph, int* rows) {
     int W = (int)fi->width, H = (int)fi->height;
@@ -4662,7 +4806,7 @@ static void cb_preview(const char* s, int cols, char lines[2][96]) {
         char c = *p == '\n' || *p == '\r' || *p == '\t' ? ' ' : *p;
         if (c == ' ' && (n == 0 || lines[l][n - 1] == ' ')) continue;     /* (runs of spaces as one) */
         int clen = (unsigned char)c < 0x80 ? 1 : (unsigned char)c >= 0xF0 ? 4 : (unsigned char)c >= 0xE0 ? 3 : 2;
-        int used = u8_cols(lines[l], n);
+        int used = u8_width(lines[l], n);
         if (used >= cols) {
             if (l == 1) { more = 1; break; }
             l = 1;
@@ -4677,7 +4821,7 @@ static void cb_preview(const char* s, int cols, char lines[2][96]) {
     if (more) {
         char* t = lines[l];
         int m = (int)strlen(t);
-        while (m > 0 && u8_cols(t, m) > cols - 3) { m--; while (m > 0 && ((unsigned char)t[m] & 0xC0) == 0x80) m--; }
+        while (m > 0 && u8_width(t, m) > cols - 3) { m--; while (m > 0 && ((unsigned char)t[m] & 0xC0) == 0x80) m--; }
         t[m] = 0;
         kstrlcat(t, "...", 96);
     }
@@ -4685,7 +4829,7 @@ static void cb_preview(const char* s, int cols, char lines[2][96]) {
 
 /* a push pin, filled when pinned */
 static void cb_draw_pin(int x, int y, int on, uint32_t bg) {
-    uint32_t c = on ? 0x00FFD34Eu : 0x007A8699u;
+    uint32_t c = on ? TC(0xFFD34E) : TC(0x7A8699);
     gfx_fill_rect(x + 2, y, 8, 2, c);
     gfx_fill_rect(x + 3, y + 2, 6, 5, on ? c : bg);
     gfx_fill_rect(x + 3, y + 2, 1, 5, c);
@@ -4698,16 +4842,16 @@ static void cb_draw(const fb_info_t* fi) {
     int px, py, pw, ph, rows;
     cb_geom(fi, &px, &py, &pw, &ph, &rows);
     cb_clamp(rows);
-    draw_bevel_box(px, py, pw, ph, CB_BG, 0x00505E74u, 0x000C0F14u);
-    gfx_draw_text(px + 14, py + 13, "Clipboard", 0x00FFFFFFu, CB_BG);
+    draw_bevel_box(px, py, pw, ph, CB_BG, TC(0x505E74), TC(0x0C0F14));
+    gfx_draw_text(px + 14, py + 13, _("Clipboard"), TC(0xFFFFFF), CB_BG);
     int n = clipboard_hist_count();
     int bw = 10 * 8, bx = px + pw - bw - 12;
-    draw_bevel_box(bx, py + 7, bw, 20, n ? 0x00303740u : 0x00262B33u, 0x00535D6Eu, 0x0015191Fu);
-    gfx_draw_text(bx + (bw - 9 * 8) / 2, py + 13, "Clear all", n ? 0x00E8EEF6u : 0x00687384u, n ? 0x00303740u : 0x00262B33u);
+    draw_bevel_box(bx, py + 7, bw, 20, n ? TC(0x303740) : TC(0x262B33), TC(0x535D6E), TC(0x15191F));
+    gfx_draw_text(bx + (bw - 9 * 8) / 2, py + 13, _("Clear all"), n ? TC(0xE8EEF6) : TC(0x687384), n ? TC(0x303740) : TC(0x262B33));
     int y = py + CB_HEAD_H;
     if (!n) {
-        gfx_draw_text(px + 14, y + 10, "Nothing copied yet.", 0x00E8EEF6u, CB_BG);
-        gfx_draw_text(px + 14, y + 28, "Copy text (Ctrl+C) to see it here.", 0x009AA6B6u, CB_BG);
+        gfx_draw_text(px + 14, y + 10, _("Nothing copied yet."), TC(0xE8EEF6), CB_BG);
+        gfx_draw_text(px + 14, y + 28, _("Copy text (Ctrl+C) to see it here."), TC(0x9AA6B6), CB_BG);
     }
     char* buf = (char*)kmalloc(400);
     for (int r = 0; r < rows && buf; r++, y += CB_ROW_H) {
@@ -4716,22 +4860,22 @@ static void cb_draw(const fb_info_t* fi) {
         if (clipboard_hist_peek(i, buf, 400, &len, &pinned) < 0) break;
         int sel = i == g_cb_sel;
         uint32_t bg = sel ? CB_ROW_SEL : CB_ROW;
-        draw_bevel_box(px + 8, y + 2, pw - 16, CB_ROW_H - 4, bg, sel ? 0x0090B8F0u : 0x00384252u, 0x0010151Du);
+        draw_bevel_box(px + 8, y + 2, pw - 16, CB_ROW_H - 4, bg, sel ? TC(0x90B8F0) : TC(0x384252), TC(0x10151D));
         char lines[2][96];
         cb_preview(buf, (pw - 16 - 52) / 8, lines);
         if (!lines[0][0]) kstrlcpy(lines[0], "(spaces only)", sizeof(lines[0]));
-        gfx_draw_text(px + 16, y + 9, lines[0], 0x00E8EEF6u, bg);
-        if (lines[1][0]) gfx_draw_text(px + 16, y + 23, lines[1], 0x00C2CCD8u, bg);
+        gfx_draw_text(px + 16, y + 9, lines[0], TC(0xE8EEF6), bg);
+        if (lines[1][0]) gfx_draw_text(px + 16, y + 23, lines[1], TC(0xC2CCD8), bg);
         cb_draw_pin(px + pw - 46, y + 12, pinned, bg);
-        gfx_draw_text(px + pw - 24, y + 15, "x", 0x00C2CCD8u, bg);
+        gfx_draw_text(px + pw - 24, y + 15, "x", TC(0xC2CCD8), bg);
     }
     kfree(buf);
     if (n > rows) {
         char m[32];
         ksnprintf(m, sizeof(m), "%d-%d of %d", g_cb_top + 1, g_cb_top + rows, n);
-        gfx_draw_text(px + pw - 12 - (int)strlen(m) * 8, py + ph - 15, m, 0x009AA6B6u, CB_BG);
+        gfx_draw_text(px + pw - 12 - (int)strlen(m) * 8, py + ph - 15, m, TC(0x9AA6B6), CB_BG);
     }
-    gfx_draw_text(px + 14, py + ph - 15, "Enter: paste  Del: delete  P: pin", 0x009AA6B6u, CB_BG);
+    gfx_draw_text(px + 14, py + ph - 15, _("Enter: paste  Del: delete  P: pin"), TC(0x9AA6B6), CB_BG);
 }
 
 static int cb_key(int code) {
@@ -4797,10 +4941,10 @@ static void kb_draw_overlays(const fb_info_t* fi) {
         int first = g_sw_sel >= n ? g_sw_sel - n + 1 : 0;
         int pw = n * (cw + gap) + gap + 20, ph = ch + 56;
         int px = (W - pw) / 2, py = (H - ph) / 2;
-        draw_bevel_box(px, py, pw, ph, 0x001B212Bu, 0x00505E74u, 0x000C0F14u);
+        draw_bevel_box(px, py, pw, ph, TC(0x1B212B), TC(0x505E74), TC(0x0C0F14));
         char t[64];
         win_title(g_list[g_sw_sel], t, sizeof(t));
-        gfx_draw_text(px + (pw - (int)strlen(t) * 8) / 2, py + 12, t, 0x00FFFFFFu, 0x001B212Bu);
+        gfx_draw_text(px + (pw - (int)strlen(t) * 8) / 2, py + 12, t, TC(0xFFFFFF), TC(0x1B212B));
         for (int i = 0; i < n; i++)
             kb_card(px + 20 + i * (cw + gap), py + 36, cw, ch, g_list[first + i], first + i == g_sw_sel, 1);
     }
@@ -4810,9 +4954,9 @@ static void kb_draw_overlays(const fb_info_t* fi) {
         int stride, tw, th;
         t = fb_target(&stride, &tw, &th);
         if (t) for (int y = 0; y < th - BAR_H; y++) for (int x = 0; x < tw; x++) { uint32_t p = t[y * stride + x]; t[y * stride + x] = (p >> 2) & 0x003F3F3Fu; }
-        gfx_draw_text_scaled(40, 30, 2, "Task view", 0x00FFFFFFu, 0x00000000u);
-        gfx_draw_text(40, 66, "Arrows choose, Enter switches, Delete closes, Esc goes back", 0x009AA6B6u, 0x00000000u);
-        if (!g_nlist) gfx_draw_text(40, 110, "No windows are open.", 0x00E8EEF6u, 0);
+        gfx_draw_text_scaled(40, 30, 2, _("Task view"), TC(0xFFFFFF), 0x00000000u);
+        gfx_draw_text(40, 66, _("Arrows choose, Enter switches, Delete closes, Esc goes back"), TC(0x9AA6B6), 0x00000000u);
+        if (!g_nlist) gfx_draw_text(40, 110, _("No windows are open."), TC(0xE8EEF6), 0);
         for (int i = 0; i < g_nlist; i++) {
             int x, y, cw, ch;
             tv_card(fi, i, &x, &y, &cw, &ch);
@@ -4821,12 +4965,13 @@ static void kb_draw_overlays(const fb_info_t* fi) {
         }
     }
     if (g_cb_open) cb_draw(fi);
+    if (ep_is_open()) ep_draw(fi, BAR_H);
     if (g_bar_kb && g_bar_sel >= 0 && g_bar_sel < g_ntb) {
         int bw = tb_btn_w(fi), x = TB_X + g_bar_sel * bw, y = H - BAR_H + 1;
-        gfx_fill_rect(x - 1, y, bw - 2, 2, 0x00FFD34Eu);
-        gfx_fill_rect(x - 1, y + BAR_H - 4, bw - 2, 2, 0x00FFD34Eu);
-        gfx_fill_rect(x - 1, y, 2, BAR_H - 2, 0x00FFD34Eu);
-        gfx_fill_rect(x + bw - 5, y, 2, BAR_H - 2, 0x00FFD34Eu);
+        gfx_fill_rect(x - 1, y, bw - 2, 2, TC(0xFFD34E));
+        gfx_fill_rect(x - 1, y + BAR_H - 4, bw - 2, 2, TC(0xFFD34E));
+        gfx_fill_rect(x - 1, y, 2, BAR_H - 2, TC(0xFFD34E));
+        gfx_fill_rect(x + bw - 5, y, 2, BAR_H - 2, TC(0xFFD34E));
     }
 }
 
@@ -5172,8 +5317,8 @@ static void dband_draw(const fb_info_t* fi) {
             uint32_t p = t[y * stride + x];
             t[y * stride + x] = ((p & 0x00FEFEFEu) >> 1) + ((0x006FA8E8u & 0x00FEFEFEu) >> 1);
         }
-    gfx_fill_rect(x0, y0, x1 - x0, 1, 0x0099CCFFu); gfx_fill_rect(x0, y1 - 1, x1 - x0, 1, 0x0099CCFFu);
-    gfx_fill_rect(x0, y0, 1, y1 - y0, 0x0099CCFFu); gfx_fill_rect(x1 - 1, y0, 1, y1 - y0, 0x0099CCFFu);
+    gfx_fill_rect(x0, y0, x1 - x0, 1, TC(0x99CCFF)); gfx_fill_rect(x0, y1 - 1, x1 - x0, 1, TC(0x99CCFF));
+    gfx_fill_rect(x0, y0, 1, y1 - y0, TC(0x99CCFF)); gfx_fill_rect(x1 - 1, y0, 1, y1 - y0, TC(0x99CCFF));
 }
 
 static void dnd_draw(const fb_info_t* fi, int mx, int my) {
@@ -5192,12 +5337,12 @@ static void dnd_draw(const fb_info_t* fi, int mx, int my) {
     else ksnprintf(t, sizeof(t), "%s%d items", copy ? "+ " : "", n);
     if (strlen(t) > 22) { t[20] = '.'; t[21] = '.'; t[22] = 0; }
     int w = 44 + (int)strlen(t) * 8;
-    gfx_fill_rect(x, y, w, 38, 0x002A3A52u);
-    gfx_fill_rect(x, y, w, 1, 0x006B8AB8u);
-    gfx_fill_rect(x, y + 37, w, 1, 0x00101820u);
+    gfx_fill_rect(x, y, w, 38, TC(0x2A3A52));
+    gfx_fill_rect(x, y, w, 1, TC(0x6B8AB8));
+    gfx_fill_rect(x, y + 37, w, 1, TC(0x101820));
     fileicon_t k = g_ndnd ? (fileops_is_dir(g_dnd[0]) ? FI_FOLDER : fileicon_for_name(fileops_base(g_dnd[0]))) : FI_PROGRAM;
     fileicon_draw(k, x + 4, y + 3, 32);
-    gfx_draw_text(x + 40, y + 15, t, 0x00FFFFFFu, 0x002A3A52u);
+    gfx_draw_text(x + 40, y + 15, t, TC(0xFFFFFF), TC(0x2A3A52));
 }
 
 /* ══ apps pinned to the taskbar ═══════════════════════════════════════ */
@@ -5229,6 +5374,7 @@ static void pins_load(void) {
         }
         char s[16];
         if (settings_get("taskbar_style", s, sizeof(s))) { uint32_t n = 0; if (k_parse_u32(s, &n) && n <= 2) g_tb_style = (int)n; }
+        if (settings_get("taskbar_desks", s, sizeof(s))) g_tb_desks = strcmp(s, "0") != 0;
         return;
     }
     char* p = v;
@@ -5242,6 +5388,7 @@ static void pins_load(void) {
     }
     char s[16];
     if (settings_get("taskbar_style", s, sizeof(s))) { uint32_t n = 0; if (k_parse_u32(s, &n) && n <= 2) g_tb_style = (int)n; }
+    if (settings_get("taskbar_desks", s, sizeof(s))) g_tb_desks = strcmp(s, "0") != 0;
 }
 
 static int pin_find(int act, const char* app) {
@@ -5291,7 +5438,7 @@ static int win_pin_target(int h, int* act, char* app, int cap) {
     app[0] = 0;
     if (k == WK_TERM) { *act = ACT_TERMINAL; return 1; }
     if (k == WK_APP) {
-        static const int MAP[APP_COUNT] = { ACT_FILES, ACT_BROWSER, ACT_NOTEPAD, ACT_APPS, ACT_TASKMGR, ACT_SETTINGS, -1, -1 };
+        static const int MAP[APP_COUNT] = { ACT_FILES, ACT_BROWSER, ACT_NOTEPAD, ACT_APPS, ACT_TASKMGR, ACT_SETTINGS, -1, ACT_DEVMGR, ACT_DISKMGR, -1 };
         *act = i < APP_COUNT ? MAP[i] : -1;
         return *act >= 0;
     }
@@ -5327,15 +5474,15 @@ static void pins_draw(const fb_info_t* fi) {
     for (int i = 0; i < g_npins; i++) {
         int x = PINS_X + i * PIN_W;
         int run = pin_running(i);
-        uint32_t bg = 0x00192026u;
-        if (run) gfx_fill_rect(x + 4, bar_y + BAR_H - 4, PIN_W - 8, 2, 0x0068A8F0u);
+        uint32_t bg = TC(0x192026);
+        if (run) gfx_fill_rect(x + 4, bar_y + BAR_H - 4, PIN_W - 8, 2, TC(0x68A8F0));
         int saved = g_is;
         g_is = 1;
         desk_icon(g_pins[i].act, x + (PIN_W - 14) / 2 - 2, bar_y + 7, g_pins[i].app);
         g_is = saved;
         (void)bg;
     }
-    if (g_npins) gfx_fill_rect(PINS_X + g_npins * PIN_W + 1, bar_y + 6, 1, BAR_H - 12, 0x004F5A6Eu);
+    if (g_npins) gfx_fill_rect(PINS_X + g_npins * PIN_W + 1, bar_y + 6, 1, BAR_H - 12, TC(0x4F5A6E));
 }
 
 void gui_set_taskbar_style(int style) {
@@ -5348,3 +5495,12 @@ void gui_set_taskbar_style(int style) {
     g_force_redraw = 1;
 }
 int gui_taskbar_style(void) { if (g_npins < 0) pins_load(); return g_tb_style; }
+
+/* the virtual desktops' buttons on the taskbar (Win+Ctrl+arrows still switch) */
+void gui_set_taskbar_desks(int on) {
+    g_tb_desks = on ? 1 : 0;
+    settings_set("taskbar_desks", on ? "1" : "0");
+    g_tb_gen++;
+    g_force_redraw = 1;
+}
+int gui_taskbar_desks(void) { if (g_npins < 0) pins_load(); return g_tb_desks; }

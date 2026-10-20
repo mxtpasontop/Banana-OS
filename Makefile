@@ -224,7 +224,7 @@ clean:
 
 
 # ── SDK: example apps (embedded in the kernel: ~/Examples) and the tarball ──
-EXAMPLES     = gl3test hello guess paint clock tones mandel threads webview gears cltest systest posixtest mousetest
+EXAMPLES     = gl3test glinfo gles2 hello languages guess paint clock tones mandel threads webview gears cltest systest posixtest mousetest
 EXAMPLE_BPKS = $(foreach e,$(EXAMPLES),sdk/examples/$(e)/$(e).bpk)
 EXAMPLE_BPKZ = $(EXAMPLE_BPKS:.bpk=.bpk.z)
 SDK_DEPS     = $(wildcard sdk/lib/*.c sdk/lib/*.h sdk/lib/*.py sdk/include/*.h sdk/include/*/*.h) sdk/banana.mk sdk/tools/bpkg sdk/tools/mkexports

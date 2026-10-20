@@ -6,6 +6,7 @@
  * OS, updates it and keeps its files (fsdisk_update). The work runs in its
  * own task, so the window shows the progress. Only on the live CD. */
 #include "installer.h"
+#include "i18n.h"
 #include "gfx.h"
 #include "winframe.h"
 #include "fsdisk.h"
@@ -39,8 +40,11 @@
 enum { P_WELCOME, P_SETUP, P_APPS, P_CONFIRM, P_WORKING, P_DONE };
 enum { M_INSTALL, M_UPDATE };
 
-static const char* const LAYOUTS[] = { "EN (Default)", "fr_CH", "FR", "DE", "de_CH", "BEPO" };
-#define NLAYOUTS 6
+static const char* const LAYOUTS[] = { "EN (Default)", "fr_CH", "FR", "DE", "de_CH", "BEPO", "IT" };
+#define NLAYOUTS 7
+/* each language's keyboard, preselected until one is clicked */
+static const char* const LANG_KB[] = { "EN (Default)", "FR", "DE", "IT", "de_CH" };
+static int g_kb_picked;
 
 static int        g_open;
 static win_geom_t g_win = { .x = 130, .y = 30, .w = 580, .h = 480, .min_w = 540, .min_h = 460 };
@@ -88,7 +92,7 @@ static void label(int x, int y, const char* s, uint32_t c) { gfx_draw_text(x, y,
 static void button(int x, int y, int w, const char* text, int primary, int enabled) {
     uint32_t base = !enabled ? 0x00262B33u : primary ? C_ACCENT : 0x00303740u;
     bevel(x, y, w, 22, base, 0x00535D6Eu, 0x0015191Fu);
-    int tw = u8_cols(text, (int)strlen(text)) * 8;
+    int tw = u8_width(text, (int)strlen(text)) * 8;
     gfx_draw_text(x + (w - tw) / 2, y + 7, text, enabled ? C_TEXT : 0x00687384u, base);
 }
 static void checkbox(int x, int y, int on, const char* text) {
@@ -231,13 +235,13 @@ static int list_y(void) { return cy0() + 100; }
 
 static void draw_welcome(void) {
     int x = cx0(), y = cy0();
-    gfx_draw_text_scaled(x, y, 2, "Install Banana OS", C_HEAD, C_PANEL);
-    label(x, y + 30, "Puts Banana OS on this computer's hard disk, so it starts", C_DIM);
-    label(x, y + 46, "without the CD and keeps your files and settings.", C_DIM);
+    gfx_draw_text_scaled(x, y, 2, _("Install Banana OS"), C_HEAD, C_PANEL);
+    label(x, y + 30, _("Puts Banana OS on this computer's hard disk, so it starts"), C_DIM);
+    label(x, y + 46, _("without the CD and keeps your files and settings."), C_DIM);
     label(x, y + 78, g_nlist > 1 ? "Choose the disk to install on" : "Disk", C_HEAD);
     if (g_nlist == 0) {
-        label(x, y + 100, "No hard disk was found.", C_ERR);
-        label(x, y + 118, "Add a virtual hard disk (256 MB or more) to the VM, then look again.", C_DIM);
+        label(x, y + 100, _("No hard disk was found."), C_ERR);
+        label(x, y + 118, _("Add a virtual hard disk (256 MB or more) to the VM, then look again."), C_DIM);
     } else {
         /* one row a disk: a radio button, what it is, what is on it */
         int ly = list_y();
@@ -249,64 +253,79 @@ static void draw_welcome(void) {
         }
         ly += 6;
         if (g_sel < 0) {
-            label(x, ly, "Click the disk Banana OS goes on.", C_DIM);
+            label(x, ly, _("Click the disk Banana OS goes on."), C_DIM);
         } else if (!disk_big_enough()) {
-            label(x, ly, "This disk is too small: Banana OS needs at least 160 MB.", C_ERR);
+            label(x, ly, _("This disk is too small: Banana OS needs at least 160 MB."), C_ERR);
         } else if (g_has_install) {
-            label(x, ly, "Update it with this CD and keep its files, settings and password,", C_DIM);
-            label(x, ly + 16, "or erase the disk and install from scratch.", C_DIM);
+            label(x, ly, _("Update it with this CD and keep its files, settings and password,"), C_DIM);
+            label(x, ly + 16, _("or erase the disk and install from scratch."), C_DIM);
         } else {
             label(x, ly, g_list_warn[g_sel] ? "This disk will be ERASED - everything on it is lost."
                                             : "The disk will be erased and Banana OS installed on it.",
                   g_list_warn[g_sel] ? C_WARN : C_DIM);
-            if (g_nlist > 1) label(x, ly + 16, "The other disks are left as they are.", C_DIM);
+            if (g_nlist > 1) label(x, ly + 16, _("The other disks are left as they are."), C_DIM);
         }
     }
     int by = btn_y(), br = btn_r();
-    button(g_win.x + 20, by, 110, "Look again", 0, 1);
+    button(g_win.x + 20, by, 110, _("Look again"), 0, 1);
     if (g_disks == 1 && disk_big_enough() && g_has_install) {
-        button(br - 170, by, 170, "Update (keep files)", 1, 1);
-        button(br - 350, by, 170, "Erase and reinstall", 0, 1);
+        button(br - 170, by, 170, _("Update (keep files)"), 1, 1);
+        button(br - 350, by, 170, _("Erase and reinstall"), 0, 1);
     } else {
-        button(br - 100, by, 100, "Next", 1, g_disks == 1 && disk_big_enough());
+        button(br - 100, by, 100, _("Next"), 1, g_disks == 1 && disk_big_enough());
     }
 }
 
-static int setup_y_pw(void)    { return cy0() + 150; }
-static int setup_y_boot(void)  { return cy0() + 236; }
+#define SETUP_KB 76                     /* the keyboard's rows, under the language's */
+static int setup_y_pw(void)    { return cy0() + 155 + SETUP_KB; }
+static int setup_y_boot(void)  { return cy0() + 205 + SETUP_KB; }
+
+static const char* const PW_NAMES[2] = { "Password:", "Again:" };
+/* the password fields, right of their (translated) names */
+static int pw_dx(void) {
+    int w = 90;
+    for (int f = 0; f < 2; f++) {
+        const char* t = _(PW_NAMES[f]);
+        int tw = u8_width(t, (int)strlen(t)) * 8 + 12;
+        if (tw > w) w = tw;
+    }
+    return w;
+}
 
 static void draw_setup(void) {
     int x = cx0(), y = cy0();
-    label(x, y, "Keyboard layout", C_HEAD);
+    label(x, y, _("Language"), C_HEAD);
+    for (int i = 0; i < i18n_count(); i++) radio(x + (i % 3) * 170, y + 22 + (i / 3) * 24, i == i18n_current(), i18n_name(i));
+    y += SETUP_KB;
+    label(x, y, _("Keyboard layout"), C_HEAD);
     for (int i = 0; i < NLAYOUTS; i++)
         radio(x + (i % 3) * 170, y + 22 + (i / 3) * 24, i == g_layout, LAYOUTS[i]);
 
     int py = setup_y_pw();
-    label(x, py - 60, "Password", C_HEAD);
-    label(x, py - 42, "For the login screen and SSH. Leave it empty for none.", C_DIM);
-    static const char* const NAMES[2] = { "Password:", "Again:" };
+    label(x, py - 60, _("Password"), C_HEAD);
+    label(x, py - 42, _("For the login screen and SSH. Leave it empty for none."), C_DIM);
     for (int f = 0; f < 2; f++) {
         int fy = py - 18 + f * 26;
-        label(x, fy + 4, NAMES[f], C_TEXT);
-        bevel(x + 90, fy, 220, 20, C_FIELD, 0x0010141Cu, g_focus == f ? C_ACCENT : 0x00404B5Cu);
+        label(x, fy + 4, _(PW_NAMES[f]), C_TEXT);
+        bevel(x + pw_dx(), fy, 220, 20, C_FIELD, 0x0010141Cu, g_focus == f ? C_ACCENT : 0x00404B5Cu);
         int n = u8_cols(g_pw[f], (int)strlen(g_pw[f]));
         char stars[32];
         int k = 0;
         for (; k < n && k < 26; k++) stars[k] = '*';
         stars[k] = 0;
-        gfx_draw_text(x + 96, fy + 6, stars, C_TEXT, C_FIELD);
-        if (g_focus == f && (timer_ms() / 500) % 2 == 0) gfx_fill_rect(x + 96 + k * 8, fy + 4, 2, 12, C_TEXT);
+        gfx_draw_text(x + pw_dx() + 6, fy + 6, stars, C_TEXT, C_FIELD);
+        if (g_focus == f && (timer_ms() / 500) % 2 == 0) gfx_fill_rect(x + pw_dx() + 6 + k * 8, fy + 4, 2, 12, C_TEXT);
     }
 
     int by = setup_y_boot();
-    label(x, by, "When the computer starts", C_HEAD);
-    checkbox(x, by + 22, g_desktop, "Start the desktop (not the text console)");
-    checkbox(x, by + 46, g_login && g_pw[0][0], "Ask for the password (login screen)");
-    checkbox(x, by + 70, g_httpd, "Start the web server (httpd, port 80)");
-    checkbox(x, by + 94, g_sshd, "Start the SSH server (sshd, port 22 - needs a password)");
+    label(x, by, _("When the computer starts"), C_HEAD);
+    checkbox(x, by + 22, g_desktop, _("Start the desktop (not the text console)"));
+    checkbox(x, by + 46, g_login && g_pw[0][0], _("Ask for the password (login screen)"));
+    checkbox(x, by + 70, g_httpd, _("Start the web server (httpd, port 80)"));
+    checkbox(x, by + 94, g_sshd, _("Start the SSH server (sshd, port 22 - needs a password)"));
 
-    button(g_win.x + 20, btn_y(), 100, "Back", 0, 1);
-    button(btn_r() - 100, btn_y(), 100, "Next", 1, 1);
+    button(g_win.x + 20, btn_y(), 100, _("Back"), 0, 1);
+    button(btn_r() - 100, btn_y(), 100, _("Next"), 1, 1);
 }
 
 /* the apps page: which built-in apps go on the disk */
@@ -320,31 +339,31 @@ static int apps_y(void) { return cy0() + 56; }
 
 static void draw_apps(void) {
     int x = cx0(), y = cy0();
-    label(x, y, "Apps", C_HEAD);
-    label(x, y + 20, "Which of the apps that come with Banana OS go on the disk?", C_DIM);
+    label(x, y, _("Apps"), C_HEAD);
+    label(x, y + 20, _("Which of the apps that come with Banana OS go on the disk?"), C_DIM);
     for (int p = 0; p < PROFILE_COUNT; p++) {
         int ry = apps_y() + p * APPS_ROW;
         if (p == g_profile) bevel(x - 6, ry - 6, cw() + 12, APPS_ROW - 8, 0x0026303Eu, 0x00303B4Cu, 0x001A2029u);
         radio(x, ry, p == g_profile, builtin_profile_name(p));
-        if (p == PROFILE_FULL) label(x + 24 + 9 * 8, ry + 3, "(recommended)", C_DIM);
+        if (p == PROFILE_FULL) label(x + 24 + 9 * 8, ry + 3, _("(recommended)"), C_DIM);
         label(x + 24, ry + 22, PROFILE_LINES[p][0], C_TEXT);
         label(x + 24, ry + 38, PROFILE_LINES[p][1], C_DIM);
     }
-    label(x, apps_y() + PROFILE_COUNT * APPS_ROW + 4, "What is left out stays installable: App Store > Discover.", C_DIM);
-    button(g_win.x + 20, btn_y(), 100, "Back", 0, 1);
-    button(btn_r() - 100, btn_y(), 100, "Next", 1, 1);
+    label(x, apps_y() + PROFILE_COUNT * APPS_ROW + 4, _("What is left out stays installable: App Store > Discover."), C_DIM);
+    button(g_win.x + 20, btn_y(), 100, _("Back"), 0, 1);
+    button(btn_r() - 100, btn_y(), 100, _("Next"), 1, 1);
 }
 
 static void draw_confirm(void) {
     int x = cx0(), y = cy0();
     char line[128];
     if (g_mode == M_UPDATE) {
-        label(x, y, "Ready to update", C_HEAD);
+        label(x, y, _("Ready to update"), C_HEAD);
         label(x, y + 24, g_disk_desc, C_TEXT);
-        label(x, y + 52, "The system on the disk is replaced with this CD's.", C_DIM);
-        label(x, y + 70, "Your files, settings and password are kept.", C_OK);
+        label(x, y + 52, _("The system on the disk is replaced with this CD's."), C_DIM);
+        label(x, y + 70, _("Your files, settings and password are kept."), C_OK);
     } else {
-        label(x, y, "Ready to install", C_HEAD);
+        label(x, y, _("Ready to install"), C_HEAD);
         label(x, y + 24, g_disk_desc, C_TEXT);
         ksnprintf(line, sizeof(line), "Keyboard: %s", LAYOUTS[g_layout]);
         label(x, y + 56, line, C_TEXT);
@@ -356,16 +375,16 @@ static void draw_confirm(void) {
         label(x, y + 92, line, C_TEXT);
         ksnprintf(line, sizeof(line), "Apps: %s", builtin_profile_name(g_profile));
         label(x, y + 110, line, C_TEXT);
-        label(x, y + 144, "Everything on this disk will be erased.", C_ERR);
+        label(x, y + 144, _("Everything on this disk will be erased."), C_ERR);
         if (g_sel >= 0 && g_list_warn[g_sel]) {
             ksnprintf(line, sizeof(line), "On it now: %s", g_list_note[g_sel]);
             label(x, y + 162, line, C_WARN);
         }
-        if (g_nlist > 1) label(x, y + 184, "The other disks are not touched.", C_DIM);
+        if (g_nlist > 1) label(x, y + 184, _("The other disks are not touched."), C_DIM);
         if (g_profile != PROFILE_FULL)
-            label(x, y + 206, "The apps left out are removed from this live session too.", C_DIM);
+            label(x, y + 206, _("The apps left out are removed from this live session too."), C_DIM);
     }
-    button(g_win.x + 20, btn_y(), 100, "Back", 0, 1);
+    button(g_win.x + 20, btn_y(), 100, _("Back"), 0, 1);
     button(btn_r() - 120, btn_y(), 120, g_mode == M_UPDATE ? "Update" : "Install", 1, 1);
 }
 
@@ -382,7 +401,7 @@ static void draw_working(void) {
     char pct[16];
     ksnprintf(pct, sizeof(pct), "%u%%", total ? (uint32_t)((uint64_t)done * 100u / total) : 0u);
     label(x, y + 84, pct, C_DIM);
-    label(x, y + 110, "Please wait, and do not switch the computer off.", C_WARN);
+    label(x, y + 110, _("Please wait, and do not switch the computer off."), C_WARN);
 }
 
 static void draw_done(void) {
@@ -391,16 +410,16 @@ static void draw_done(void) {
     if (err) {
         label(x, y, g_mode == M_UPDATE ? "The update failed" : "The installation failed", C_ERR);
         label(x, y + 24, err, C_TEXT);
-        label(x, y + 48, "Nothing else was changed; you can try again.", C_DIM);
-        button(g_win.x + 20, btn_y(), 100, "Back", 0, 1);
-        button(btn_r() - 100, btn_y(), 100, "Close", 0, 1);
+        label(x, y + 48, _("Nothing else was changed; you can try again."), C_DIM);
+        button(g_win.x + 20, btn_y(), 100, _("Back"), 0, 1);
+        button(btn_r() - 100, btn_y(), 100, _("Close"), 0, 1);
         return;
     }
     label(x, y, g_mode == M_UPDATE ? "Banana OS is updated" : "Banana OS is installed", C_OK);
-    label(x, y + 24, "Remove the CD (or choose the hard disk in the boot menu)", C_TEXT);
-    label(x, y + 42, "and restart the computer.", C_TEXT);
-    button(btn_r() - 130, btn_y(), 130, "Restart now", 1, 1);
-    button(btn_r() - 130 - 10 - 100, btn_y(), 100, "Close", 0, 1);
+    label(x, y + 24, _("Remove the CD (or choose the hard disk in the boot menu)"), C_TEXT);
+    label(x, y + 42, _("and restart the computer."), C_TEXT);
+    button(btn_r() - 130, btn_y(), 130, _("Restart now"), 1, 1);
+    button(btn_r() - 130 - 10 - 100, btn_y(), 100, _("Close"), 0, 1);
 }
 
 void installer_draw(const fb_info_t* fi) {
@@ -409,7 +428,7 @@ void installer_draw(const fb_info_t* fi) {
     int x = g_win.x, y = g_win.y, W = g_win.w, H = g_win.h;
     bevel(x, y, W, H, C_PANEL, 0x00505D72u, 0x0010141Cu);
     bevel(x + 3, y + 3, W - 6, TITLE_H - 1, C_TITLE, 0x00647692u, 0x00111923u);
-    gfx_draw_text(x + 10, y + 7, "Install Banana OS", 0x00FFFFFFu, C_TITLE);
+    gfx_draw_text(x + 10, y + 7, _("Install Banana OS"), 0x00FFFFFFu, C_TITLE);
     win_draw_buttons(&g_win, 4, 12);
     if (g_running) g_page = P_WORKING;
     else if (g_page == P_WORKING) g_page = P_DONE;
@@ -471,12 +490,20 @@ void installer_click(int mx, int my) {
         }
         return;
     case P_SETUP: {
+        for (int i = 0; i < i18n_count(); i++)
+            if (inside(mx, my, x + (i % 3) * 170, y + 18 + (i / 3) * 24, 160, 22)) {
+                i18n_set(i18n_code(i));                  /* (the window follows it at once) */
+                /* the keyboard of that language, unless one was chosen */
+                if (!g_kb_picked && i < (int)(sizeof(LANG_KB) / sizeof(LANG_KB[0])))
+                    for (int k = 0; k < NLAYOUTS; k++) if (!strcmp(LAYOUTS[k], LANG_KB[i])) g_layout = k;
+                return;
+            }
         for (int i = 0; i < NLAYOUTS; i++)
-            if (inside(mx, my, x + (i % 3) * 170, y + 18 + (i / 3) * 24, 160, 22)) { g_layout = i; return; }
+            if (inside(mx, my, x + (i % 3) * 170, y + SETUP_KB + 18 + (i / 3) * 24, 160, 22)) { g_layout = i; g_kb_picked = 1; return; }
         int py = setup_y_pw();
         g_focus = -1;
         for (int f = 0; f < 2; f++)
-            if (inside(mx, my, x + 90, py - 18 + f * 26, 220, 20)) { g_focus = f; return; }
+            if (inside(mx, my, x + pw_dx(), py - 18 + f * 26, 220, 20)) { g_focus = f; return; }
         int bt = setup_y_boot();
         if (inside(mx, my, x, bt + 18, cw(), 22)) { g_desktop = !g_desktop; return; }
         if (inside(mx, my, x, bt + 42, cw(), 22)) {

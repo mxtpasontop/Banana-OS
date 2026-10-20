@@ -16,6 +16,7 @@
 #include "../kernel/boottime.h"
 #include "../kernel/font.h"
 #include "../kernel/utf8.h"
+#include "../kernel/emojipick.h"
 #include "../kernel/pci.h"
 #include "../kernel/uspace.h"
 #include "../kernel/mouse_capture.h"
@@ -705,8 +706,9 @@ static void t_gpu_names(void) {
 /* ── UTF-8 everywhere: terminal cells, drawing, VGA, FAT names ── */
 static void t_utf8(void) {
     section("UTF-8: any character in the terminal, the editor and file names");
-    /* the terminal: each UTF-8 character one cell, holding its code point */
-    static const uint32_t want[] = { 'a', 0xE9, 0x20AC, 0x3A9, 0x416, 0x2500, 0x1F34C, 0xFFFD, 'z' };
+    /* the terminal: each UTF-8 character one cell, holding its code point
+     * (an emoji two: the second marked TERMINAL_WIDE_CONT) */
+    static const uint32_t want[] = { 'a', 0xE9, 0x20AC, 0x3A9, 0x416, 0x2500, 0x1F34C, TERMINAL_WIDE_CONT, 0xFFFD, 'z' };
     const char* text = "a\xC3\xA9\xE2\x82\xAC\xCE\xA9\xD0\x96\xE2\x94\x80\xF0\x9F\x8D\x8C\x80z";  /* (\x80: a stray byte) */
     int vt = terminal_vt_alloc(), was = terminal_vt_get_active();
     if (vt < 0) {
@@ -722,7 +724,7 @@ static void t_utf8(void) {
         int ok = ch != NULL, at = -1;
         for (unsigned i = 0; ok && i < sizeof(want) / sizeof(want[0]); i++) if (ch[i] != want[i]) { ok = 0; at = (int)i; }
         char note[96];
-        if (ok) ksnprintf(note, sizeof(note), "a e-acute euro Omega Zhe box-line banana, a stray byte as U+FFFD");
+        if (ok) ksnprintf(note, sizeof(note), "a e-acute euro Omega Zhe box-line banana (2 cells), a stray byte as U+FFFD");
         else ksnprintf(note, sizeof(note), "cell %d holds U+%04X", at, ch ? ch[at] : 0);
         report("terminal cells hold any character", ok, note);
         terminal_vt_free(vt);
@@ -742,6 +744,28 @@ static void t_utf8(void) {
         report("beyond Latin-1 drawn with DejaVu Sans Mono (euro, Omega, Zhe, box line)", glyphs == 4, glyphs == 4 ? "" : "a glyph came out empty");
     } else {
         skip("beyond Latin-1 drawn with DejaVu Sans Mono", "the font is not loaded");
+    }
+    /* double width, like wcwidth(): emoji, CJK, Hangul, fullwidth forms two
+     * columns, combining marks none */
+    {
+        const char* line = "a\xF0\x9F\x8D\x8C\xE4\xB8\xAD" "e\xCC\x81" "\xEF\xBC\xA1";   /* a, banana, CJK middle, e + acute, fullwidth A */
+        int len = (int)strlen(line);
+        int ok = u8_wcwidth('a') == 1 && u8_wcwidth(0xE9) == 1 && u8_wcwidth(0x1F34C) == 2 && u8_wcwidth(0x1F600) == 2 &&
+                 u8_wcwidth(0x4E2D) == 2 && u8_wcwidth(0xAC00) == 2 && u8_wcwidth(0x3042) == 2 && u8_wcwidth(0xFF21) == 2 &&
+                 u8_wcwidth(0x301) == 0 && u8_wcwidth(0x200D) == 0 && u8_wcwidth(0xFE0F) == 0 && u8_wcwidth(0x2500) == 1 &&
+                 u8_width(line, len) == 8 && u8_byte_at_col(line, len, 1) == 1 && u8_byte_at_col(line, len, 2) == 1 &&
+                 u8_byte_at_col(line, len, 3) == 5 && u8_byte_at_col(line, len, 5) == 8 && u8_byte_at_col(line, len, 6) == 11;
+        report("wide characters take two columns (emoji, CJK, Hangul, fullwidth), combining marks none", ok, "");
+    }
+    /* the emoji panel (Win+.): its search */
+    {
+        const char* first = NULL;
+        int banana = ep_search_count("banana", &first), hearts = ep_search_count("heart", NULL);
+        int ok = banana == 1 && first && !strcmp(first, "\xF0\x9F\x8D\x8C") && hearts >= 10 &&
+                 ep_search_count("thumbs up", NULL) == 1 && ep_search_count("qqqq", NULL) == 0;
+        char note[64];
+        ksnprintf(note, sizeof(note), "banana: %d, heart: %d", banana, hearts);
+        report("the emoji panel finds emoji by name (Win+.)", ok, note);
     }
     /* VGA text mode: code page 437 has some of it */
     int vga = terminal_cp437(0xE9) == (char)0x82 && terminal_cp437(0x2500) == (char)0xC4 &&
@@ -1149,6 +1173,15 @@ static void t_keyboard(void) {
         { "de_CH", { 0x1A, 0x27, 0x28, KEND }, "\xC3\xBC\xC3\xB6\xC3\xA4" },
         { "BEPO", { 0x10, 0x11, 0x12, 0x13, 0x1E, 0x1F, 0x20, 0x21, KG, 0x1E, KGU, KEND }, "b\xC3\xA9poauie\xC3\xA6" },
         { "FR", { 0x1D, 0x10, 0x9D, KEND }, "\x01" },                    /* Ctrl+A: by the letter on the key */
+        { "RU", { 0x10, 0x11, 0x12, KS, 0x21, KSU, KEND }, "\xD0\xB9\xD1\x86\xD1\x83\xD0\x90" },   /* йцуА */
+        { "RU", { 0x1D, 0x2E, 0x9D, KEND }, "\x03" },                    /* Ctrl+C: by its place */
+        { "GR", { 0x1E, 0x27, 0x1E, 0x11, KEND }, "\xCE\xB1\xCE\xAC\xCF\x82" },       /* α ά ς */
+        { "CZ", { 0x03, 0x04, KS, 0x0D, KSU, 0x2E, KEND }, "\xC4\x9B\xC5\xA1\xC4\x8D" },   /* ě š ˇc = č */
+        { "Dvorak", { 0x10, 0x13, 0x1F, 0x35, KEND }, "'poz" },
+        { "Colemak", { 0x12, 0x1F, 0x20, 0x24, KEND }, "frsn" },
+        { "SE", { 0x1A, 0x27, 0x28, KEND }, "\xC3\xA5\xC3\xB6\xC3\xA4" },
+        { "PL", { KG, 0x1E, 0x26, KGU, KEND }, "\xC4\x85\xC5\x82" },
+        { "TR", { 0x17, 0x28, 0x1A, KEND }, "\xC4\xB1i\xC4\x9F" },
     };
     int n = (int)(sizeof(C) / sizeof(C[0])), bad = 0;
     char note[160] = "";
@@ -1162,7 +1195,7 @@ static void t_keyboard(void) {
     }
     if (!bad) ksnprintf(note, sizeof(note), "%d sequences on %d layouts", n, keyboard_layout_count());
     report("every layout types what its keys show", bad == 0, note);
-    int all = keyboard_layout_count() >= 12;
+    int all = keyboard_layout_count() >= 31;
     for (int i = 0; i < keyboard_layout_count(); i++) {
         const char* name = keyboard_layout_at(i, NULL);
         char got[8];

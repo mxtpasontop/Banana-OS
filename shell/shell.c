@@ -1258,7 +1258,7 @@ static void cmd_history(void) {
 }
 
 static const char* const known_cmds[] = {
-    "help", "neofetch", "echo", "clear", "uname", "whoami", "hostname", "date", "timezone",
+    "help", "neofetch", "echo", "clear", "uname", "whoami", "hostname", "date", "cal", "timezone", "theme", "language",
     "ls", "cd", "pwd", "mkdir", "rm", "touch", "cp", "mv", "edit", "cat", "run",
     "uptime", "boottime", "termcolors", "termrender", "top", "exit", "start", "stop", "startx", "stopx",
     "keyboardctl", "loadctl", "usbctl", "proc_info", "ram_info", "gpu_info",
@@ -1277,7 +1277,7 @@ static const char* const known_cmds[] = {
     /* kernel/vmtools.c */
     "vmtools",
     /* shell/help.c */
-    "man", "apropos", "lsblk", (void*)0
+    "man", "apropos", "lsblk", "devmgr", "lsdev", "lspci", "devmgmt.msc", "diskmgr", "diskmgmt.msc", "diskpart", "mkfs.fat", "mkfs.vfat", "mkfs.exfat", "gpu", (void*)0
 };
 
 /* ── $PATH: where commands that are not built in are looked for ───── */
@@ -1687,8 +1687,20 @@ static void cmd_halt(void) {
  * automatically (see sync_if_installed() above). Booting itself is
  * unaffected - this makes the filesystem *contents* persistent, it does
  * not make the disk bootable on its own. */
+/* The keys typed before a question was shown are not its answer: the
+ * Enter that ran the command (a second one from a keyboard that repeats
+ * it, or a carriage return after it), keys pressed while `update` compared
+ * the disk with the CD... Those are thrown away, and an Enter in the first
+ * half second after the question is not taken either - it answered "no"
+ * before anyone could press y. */
+static void drop_typed_ahead(void) {
+    for (int i = 0; i < 256 && keyboard_try_getchar(); i++) { }
+}
+
 static int prompt_yes_no(void) {
     int my_vt = terminal_vt_get_active();
+    drop_typed_ahead();
+    uint32_t shown = timer_ms();
     while (1) {
         gui_poll();
         terminal_vt_set_active(my_vt);
@@ -1696,7 +1708,8 @@ static int prompt_yes_no(void) {
         char c = keyboard_try_getchar();
         if (!c) { task_sleep_ms(10); continue; }
         if (c == 'y' || c == 'Y') { terminal_writeln("y"); return 1; }
-        if (c == 'n' || c == 'N' || c == '\n' || c == 3) { terminal_writeln("n"); return 0; }
+        if ((c == '\n' || c == '\r') && timer_ms() - shown < 500) continue;   /* (typed before the question) */
+        if (c == 'n' || c == 'N' || c == '\n' || c == '\r' || c == 3 || c == 27) { terminal_writeln("n"); return 0; }
     }
 }
 
@@ -1706,6 +1719,8 @@ static int prompt_number(int max) {
     int my_vt = terminal_vt_get_active();
     char buf[8];
     int n = 0;
+    drop_typed_ahead();
+    uint32_t shown = timer_ms();
     for (;;) {
         gui_poll();
         terminal_vt_set_active(my_vt);
@@ -1717,6 +1732,7 @@ static int prompt_number(int max) {
             if (n) { n--; terminal_cursor_left(); terminal_putchar(' '); terminal_cursor_left(); }
             continue;
         }
+        if ((c == '\n' || c == '\r') && !n && timer_ms() - shown < 500) continue;   /* (typed before the question) */
         if (c == '\n' || c == '\r') {
             terminal_putchar('\n');
             if (!n) return 0;
@@ -2022,31 +2038,46 @@ static void print_prompt(int persona) {
 
 /* ── line editor painting ───────────────────────────────────────── */
 
-static void line_place_cursor(int start, int cur) {
+/* where the first n bytes of the input text end, as a linear cell offset
+ * from start: a wide character (an emoji) is two cells, and one that would
+ * start in a row's last cell goes to the next row (kernel/terminal.c) */
+static int line_pos(int start, const char* buf, int n) {
+    int w = (int)terminal_get_width(), pos = start;
+    for (int i = 0; i < n; ) {
+        int cw = u8_wcwidth(u8_decode(buf, n, &i));
+        if (cw == 2 && w > 1 && pos % w == w - 1) pos++;
+        pos += cw;
+    }
+    return pos;
+}
+
+/* the cursor after the first n bytes of the input text */
+static void line_place_cursor(int start, const char* buf, int n) {
     int w = (int)terminal_get_width();
-    int pos = start + cur;
+    int pos = line_pos(start, buf, n);
     terminal_serial_mirror(0);
     terminal_set_cursor((size_t)(pos / w), (size_t)(pos % w));
     terminal_serial_mirror(1);
 }
 
-/* Rewrites the input text from `*start`, blanking what a shorter line
- * left behind. Writing past the last row scrolls the screen, so the
- * start offset is recomputed from where the cursor actually ended up. */
+/* Rewrites the input text from `*start`, blanking what a longer line
+ * left behind (prev_len: the cells it took). Writing past the last row
+ * scrolls the screen, so the start offset moves up by as many rows as
+ * the cursor ended up short of where the text ends. */
 static void line_repaint(int* start, const char* buf, int len, int prev_len, int cur) {
     int w = (int)terminal_get_width();
-    int cols = u8_cols(buf, len);                /* prev_len: columns too */
-    int total = (prev_len > cols) ? prev_len : cols;
+    int cells = line_pos(*start, buf, len) - *start;
+    int total = (prev_len > cells) ? prev_len : cells;
     terminal_serial_mirror(0);
     terminal_set_cursor((size_t)(*start / w), (size_t)(*start % w));
     for (int i = 0; i < len; i++) terminal_putchar(buf[i]);
-    for (int i = cols; i < total; i++) terminal_putchar(' ');
+    for (int i = cells; i < total; i++) terminal_putchar(' ');
     size_t r, c;
     terminal_get_cursor(&r, &c);
-    *start = (int)(r * (size_t)w + c) - total;
+    *start -= *start + total - (int)(r * (size_t)w + c);
     if (*start < 0) *start = 0;
     terminal_serial_mirror(1);
-    line_place_cursor(*start, u8_cols(buf, cur));
+    line_place_cursor(*start, buf, cur);
 }
 
 /* The serial console gets a plain ANSI repaint of the line instead. */
@@ -2075,7 +2106,7 @@ static void line_serial_echo(const char* buf, int len, int cur, int persona) {
     echo_out(tt, "\x1b[K");
     if (len > cur) {
         char seq[16];
-        ksnprintf(seq, sizeof(seq), "\x1b[%dD", u8_cols(buf + cur, len - cur));
+        ksnprintf(seq, sizeof(seq), "\x1b[%dD", u8_width(buf + cur, len - cur));
         echo_out(tt, seq);
     }
 }
@@ -2351,7 +2382,7 @@ static void shell_readline(char* buf, int maxlen, int persona) {
                 else if (c3 == 'H' && cur > 0) cur = 0;            /* Home */
                 else if (c3 == 'F' && cur < len) cur = len;        /* End */
                 else continue;
-                line_place_cursor(start, u8_cols(buf, cur));
+                line_place_cursor(start, buf, cur);
                 line_serial_echo(buf, len, cur, persona);
                 continue;
             }
@@ -2363,7 +2394,7 @@ static void shell_readline(char* buf, int maxlen, int persona) {
                 buf[len] = 0;
                 line_repaint(&start, buf, len, prev_len, cur);
                 line_serial_echo(buf, len, cur, persona);
-                prev_len = u8_cols(buf, len);
+                prev_len = line_pos(start, buf, len) - start;
                 continue;
             }
             if (c3 == 'A') { /* history up */
@@ -2415,12 +2446,12 @@ static void shell_readline(char* buf, int maxlen, int persona) {
             prev_len = 0;
         } else if (c == 3) { /* Ctrl+C: cancel line, do not execute history entry */
             buf[0] = '\0';
-            line_place_cursor(start, u8_cols(buf, len));
+            line_place_cursor(start, buf, len);
             terminal_write("^C\n");
             return;
         } else if (c == '\n') {
             buf[len] = '\0'; /* ensure empty Enter stays empty */
-            line_place_cursor(start, u8_cols(buf, len));   /* newline after the whole (wrapped) line */
+            line_place_cursor(start, buf, len);   /* newline after the whole (wrapped) line */
             terminal_putchar('\n');
             while (len > 0 && buf[len - 1] == ' ') buf[--len] = '\0';   /* (blanks at the end mean nothing - Tab leaves one) */
             break;
@@ -2466,7 +2497,7 @@ static void shell_readline(char* buf, int maxlen, int persona) {
         /* Repaint the editable text in place (it may span several rows) */
         line_repaint(&start, buf, len, prev_len, cur);
         line_serial_echo(buf, len, cur, persona);
-        prev_len = u8_cols(buf, len);
+        prev_len = line_pos(start, buf, len) - start;
     }
 
     /* "!!" (bash/csh-style history-bang) has to resolve here, against

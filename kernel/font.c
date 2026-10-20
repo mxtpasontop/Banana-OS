@@ -331,11 +331,13 @@ int  font_doc(void) { return g_doc; }
 #ifndef FONT_HOST
 extern const uint8_t font_sans[], font_sans_end[], font_sans_bold[], font_sans_bold_end[];
 extern const uint8_t font_mono[], font_mono_end[], font_mono_bold[], font_mono_bold_end[];
+extern const uint8_t font_emoji[], font_emoji_end[];
 
 void fonts_init(void) {
     font_register(FONT_SANS, font_sans, (uint32_t)(font_sans_end - font_sans));
     font_register(FONT_SANS_BOLD, font_sans_bold, (uint32_t)(font_sans_bold_end - font_sans_bold));
     font_register(FONT_MONO, font_mono, (uint32_t)(font_mono_end - font_mono));
     font_register(FONT_MONO_BOLD, font_mono_bold, (uint32_t)(font_mono_bold_end - font_mono_bold));
+    font_register(FONT_EMOJI, font_emoji, (uint32_t)(font_emoji_end - font_emoji));
 }
 #endif

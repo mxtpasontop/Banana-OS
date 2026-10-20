@@ -4,8 +4,9 @@
 # softpipe on the processor otherwise; 64-bit), which <GL/gl3.h> apps (USE_GL3 = 1)
 # load from /lib, /usr/lib, /usr/java/lib (the java package) or /mnt/<disk>/lib.
 #     ports/mesa/build.sh [output dir]      (default: ports/mesa/build)
-# Out: <output>/libOSMesa.so, gl3test.bpk, and gl3disk.img - a FAT32 disk
-# with lib/libOSMesa.so and gl3test.bpk for QEMU (-drive file=...,if=virtio).
+# Out: <output>/libOSMesa.so, gl3test.bpk, glinfo.bpk, gles2.bpk and
+# gl3disk.img - a FAT32 disk with lib/libOSMesa.so and the apps for QEMU
+# (-drive file=...,if=virtio).
 #
 # How: Mesa is first built for Linux with the same options (the reference
 # build); then every object of libOSMesa.so is compiled again from that
@@ -81,6 +82,11 @@ cp "$OUT/banana/libOSMesa.so" "$OUT/libOSMesa.so"
 # ── the test app and a test disk ──────────────────────────────────────
 make -C "$HERE/gl3test"
 cp "$HERE/gl3test/gl3test.bpk" "$OUT/"
+# EGL and OpenGL ES: glinfo (checks every kind of context) and the gles2 demo
+for ex in glinfo gles2; do
+    make -C "$HERE/../../sdk/examples/$ex"
+    cp "$HERE/../../sdk/examples/$ex/$ex.bpk" "$OUT/"
+done
 if [ "$LLVMPIPE" != 0 ]; then
     python3 "$HERE/../../tools/check_shared_imports.py" "$OUT/libLLVM.so" "$HERE"/gl3test/build/x86_64/*.o
     python3 "$HERE/../../tools/check_shared_imports.py" "$OUT/libOSMesa.so" "$OUT/libLLVM.so" "$HERE"/gl3test/build/x86_64/*.o
@@ -97,5 +103,5 @@ mformat -i "$IMG@@1M" -F -v GL3 ::
 mmd -i "$IMG@@1M" ::/lib
 mcopy -i "$IMG@@1M" "$OUT/libOSMesa.so" ::/lib/
 [ "$LLVMPIPE" = 0 ] || mcopy -i "$IMG@@1M" "$OUT/libLLVM.so" ::/lib/
-mcopy -i "$IMG@@1M" "$OUT/gl3test.bpk" ::/
+mcopy -i "$IMG@@1M" "$OUT/gl3test.bpk" "$OUT/glinfo.bpk" "$OUT/gles2.bpk" ::/
 echo "OpenGL 3.3 for Banana OS: $OUT/libOSMesa.so ($(du -h "$OUT/libOSMesa.so" | cut -f1)), test disk $IMG"

@@ -19,6 +19,8 @@ int disk_probe(ata_disk_t* out, int max);
 int disk_read(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf);
 int disk_write(const ata_disk_t* d, uint32_t lba, uint32_t count, const void* buf);
 int disk_flush(const ata_disk_t* d);
+/* bytes read and written by every disk since boot, and the nanoseconds spent on them (Task Manager) */
+void disk_io_stats(uint64_t* rd, uint64_t* wr, uint64_t* busy_ns);
 
 /* CD/DVD: 2048-byte blocks, and the size of the ISO9660 image on it */
 int disk_cd_read(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf);

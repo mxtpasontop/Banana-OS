@@ -22,6 +22,9 @@
 #include "aptcmd.h"
 #include "adbcmd.h"
 #include "datecmd.h"
+#include "themecmd.h"
+#include "devcmd.h"
+#include "diskcmd.h"
 #include "diskbench.h"
 #include "../kernel/ext4.h"
 #include "../kernel/termcolors.h"
@@ -332,6 +335,9 @@ int syscmd_dispatch(const char* line) {
     if (strcmp(argv[0], "crashtest") == 0) return crashtest_cmd(argc, argv);
     if (strcmp(argv[0], "selftest") == 0) return selftest_cmd(argc, argv);
     if (datecmd_dispatch(argc, argv)) return 1;
+    if (themecmd_dispatch(argc, argv)) return 1;
+    if (devcmd_dispatch(argc, argv)) return 1;
+    if (diskcmd_dispatch(argc, argv)) return 1;
     if (strcmp(argv[0], "diskbench") == 0) return diskbench_cmd(argc, argv);
     if (strcmp(argv[0], "drop_caches") == 0) {
         /* as Linux's /proc/sys/vm/drop_caches: what RAM holds of the disk goes */
@@ -364,8 +370,9 @@ int syscmd_dispatch(const char* line) {
         int apps = argc > 1 && strcmp(argv[1], "apps") == 0;           /* `settings apps [name]` */
         /* `settings time` / `settings keyboard`: that page */
         int page = argc > 1 && !strcmp(argv[1], "time") ? SETTINGS_PAGE_TIME :
-                   argc > 1 && !strcmp(argv[1], "keyboard") ? SETTINGS_PAGE_KEYBOARD : -1;
-        if (argc > 1 && !apps && page < 0) { terminal_writeln("usage: settings [apps [name] | time | keyboard]"); return 1; }
+                   argc > 1 && !strcmp(argv[1], "keyboard") ? SETTINGS_PAGE_KEYBOARD :
+                   argc > 1 && !strcmp(argv[1], "themes") ? SETTINGS_PAGE_THEMES : -1;
+        if (argc > 1 && !apps && page < 0) { terminal_writeln("usage: settings [apps [name] | time | keyboard | themes]"); return 1; }
         if (!(apps ? gui_open_settings_app(argc > 2 ? argv[2] : NULL) : gui_open_settings())) terminal_writeln("settings: Settings is part of the desktop - run `startx` first");
         else if (page >= 0) settings_open_page(page);
         return 1;

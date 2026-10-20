@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "disk.h"
+#include "timer.h"
 #include "atapi.h"
 #include "ahci.h"
 #include "nvme.h"
@@ -107,8 +108,28 @@ static int disk_rw(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf,
     return rc;
 }
 
-int disk_read(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf) { return disk_rw(d, lba, count, buf, 0); }
-int disk_write(const ata_disk_t* d, uint32_t lba, uint32_t count, const void* buf) { return disk_rw(d, lba, count, (void*)buf, 1); }
+/* what the disks did since boot (Task Manager): bytes read / written and
+ * the time spent waiting for them (plain counters: a lost update now and
+ * then only blurs a statistic) */
+static uint64_t g_io_rd, g_io_wr, g_io_busy_ns;
+
+static int counted_rw(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf, int write) {
+    uint64_t t0 = timer_counter();
+    int rc = disk_rw(d, lba, count, buf, write);
+    g_io_busy_ns += timer_counter() - t0;
+    if (write) g_io_wr += (uint64_t)count * 512u;
+    else g_io_rd += (uint64_t)count * 512u;
+    return rc;
+}
+
+void disk_io_stats(uint64_t* rd, uint64_t* wr, uint64_t* busy_ns) {
+    if (rd) *rd = g_io_rd;
+    if (wr) *wr = g_io_wr;
+    if (busy_ns) *busy_ns = g_io_busy_ns;
+}
+
+int disk_read(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf) { return counted_rw(d, lba, count, buf, 0); }
+int disk_write(const ata_disk_t* d, uint32_t lba, uint32_t count, const void* buf) { return counted_rw(d, lba, count, (void*)buf, 1); }
 
 int disk_flush(const ata_disk_t* d) {
     if (d->nvme) return nvme_flush(d->nvme - 1);
@@ -123,7 +144,18 @@ int disk_flush(const ata_disk_t* d) {
     return rc;
 }
 
+static int cd_read(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf);
+
+/* (counted like the disks: Task Manager) */
 int disk_cd_read(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf) {
+    uint64_t t0 = timer_counter();
+    int rc = cd_read(d, lba, count, buf);
+    g_io_busy_ns += timer_counter() - t0;
+    g_io_rd += (uint64_t)count * 2048u;
+    return rc;
+}
+
+static int cd_read(const ata_disk_t* d, uint32_t lba, uint32_t count, void* buf) {
     if (d->ahci_port >= 0) {
         if (!needs_bounce(d, buf, count * 2048u)) return ahci_atapi_read(d->ahci_port, lba, count, buf);
         uint8_t* b = (uint8_t*)buf;

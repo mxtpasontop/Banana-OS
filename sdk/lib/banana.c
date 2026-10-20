@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /* Banana OS SDK: windows, drawing, time, sound, network, clipboard */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "banana.h"
@@ -501,4 +502,60 @@ int banana_gamepad(int index, banana_gamepad_t* out) {
         return 0;
     }
     return __banana->gamepad(index, out);
+}
+
+
+/* ── languages ── */
+const char* banana_language(void) {
+    static char lang[8];
+    if (__banana->version >= 23 && __banana->size >= __builtin_offsetof(banana_api_t, language) + sizeof(void*) &&
+        __banana->language && __banana->language(lang, sizeof(lang)) == 0 && lang[0]) return lang;
+    return "en";
+}
+
+static const banana_tr_t* g_tr_pairs;             /* the catalog of the desktop's language */
+static banana_tr_t* g_tr_file;                    /* ... read from a .lang file */
+static int g_tr_nfile;
+
+void banana_tr_init(const banana_catalog_t* catalogs) {
+    const char* l = banana_language();
+    g_tr_pairs = NULL;
+    for (int i = 0; catalogs && catalogs[i].lang; i++)
+        if (!strcmp(catalogs[i].lang, l)) { g_tr_pairs = catalogs[i].pairs; break; }
+}
+
+static char* tr_trim(char* s) {
+    while (*s == ' ' || *s == '\t') s++;
+    char* e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n')) *--e = 0;
+    return s;
+}
+
+int banana_tr_load(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) return -1;
+    char line[512];
+    int n = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char* s = tr_trim(line);
+        char* eq = strstr(s, " = ");
+        if (!*s || *s == '#' || !eq) continue;
+        *eq = 0;
+        banana_tr_t* nf = realloc(g_tr_file, sizeof(banana_tr_t) * (size_t)(g_tr_nfile + 1));
+        if (!nf) break;
+        g_tr_file = nf;
+        g_tr_file[g_tr_nfile].en = strdup(tr_trim(s));
+        g_tr_file[g_tr_nfile].tr = strdup(tr_trim(eq + 3));
+        g_tr_nfile++;
+        n++;
+    }
+    fclose(f);
+    return n;
+}
+
+const char* banana_tr(const char* en) {
+    if (!en) return en;
+    for (int i = 0; i < g_tr_nfile; i++) if (!strcmp(g_tr_file[i].en, en)) return g_tr_file[i].tr;
+    for (int i = 0; g_tr_pairs && g_tr_pairs[i].en; i++) if (!strcmp(g_tr_pairs[i].en, en)) return g_tr_pairs[i].tr;
+    return en;
 }

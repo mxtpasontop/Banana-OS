@@ -177,7 +177,39 @@ uintptr_t pci_bar(const pci_dev_t* d, int bar, int* is_io) {
     return (uintptr_t)addr;
 }
 
-void pci_enable(const pci_dev_t* d) {
+/* which driver took which function (Device Manager) */
+#define PCI_CLAIMS 64
+static struct { uint8_t bus, dev, fn, used; char name[16]; } g_claims[PCI_CLAIMS];
+
+void pci_claim(const pci_dev_t* d, const char* driver) {
+    int slot = -1;
+    for (int i = 0; i < PCI_CLAIMS; i++) {
+        if (g_claims[i].used && g_claims[i].bus == d->bus && g_claims[i].dev == d->dev && g_claims[i].fn == d->fn) { slot = i; break; }
+        if (!g_claims[i].used && slot < 0) slot = i;
+    }
+    if (slot < 0) return;
+    g_claims[slot].bus = d->bus; g_claims[slot].dev = d->dev; g_claims[slot].fn = d->fn;
+    int n = 0;
+    while (driver[n] && n < (int)sizeof(g_claims[slot].name) - 1) { g_claims[slot].name[n] = driver[n]; n++; }
+    g_claims[slot].name[n] = 0;
+    g_claims[slot].used = 1;
+}
+
+const char* pci_driver_of(uint8_t bus, uint8_t dev, uint8_t fn) {
+    for (int i = 0; i < PCI_CLAIMS; i++)
+        if (g_claims[i].used && g_claims[i].bus == bus && g_claims[i].dev == dev && g_claims[i].fn == fn) return g_claims[i].name;
+    return NULL;
+}
+
+void pci_enable_from(const pci_dev_t* d, const char* file) {
+    /* "net/e1000.c" -> "e1000" */
+    const char* b = file;
+    for (const char* q = file; *q; q++) if (*q == '/') b = q + 1;
+    char name[16];
+    int n = 0;
+    while (b[n] && b[n] != '.' && n < (int)sizeof(name) - 1) { name[n] = b[n]; n++; }
+    name[n] = 0;
+    pci_claim(d, name);
     uint16_t cmd = pci_read16(d->bus, d->dev, d->fn, 0x04);
     cmd |= 0x0007;          /* I/O space, memory space, bus master */
     cmd &= (uint16_t)~0x0400; /* make sure INTx isn't disabled */

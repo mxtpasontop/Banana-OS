@@ -34,6 +34,9 @@ int  gfx_text_size(void);
 const char* gfx_text_size_name(int size);
 int  gfx_cell_w(void);
 int  gfx_cell_h(void);
+/* how many cells a character takes (u8_wcwidth: an emoji or CJK
+ * character two, a combining mark none); a wide one is drawn across both */
+int  gfx_char_cols(uint32_t cp);
 /* one terminal / Notepad cell: c is ASCII or Latin-1 */
 void gfx_draw_cell_char(int x, int y, char c, uint32_t fg, uint32_t bg);
 void gfx_draw_cell_cp(int x, int y, uint32_t cp, uint32_t fg, uint32_t bg);

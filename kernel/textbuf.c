@@ -70,13 +70,13 @@ static void clamp(textbuf_t* t) {
 int tb_col(const textbuf_t* t, int y, int x) {
     if (y < 0 || y >= t->n) return x;
     const tb_line_t* l = &t->lines[y];
-    return u8_cols(l->s, x < (int)l->len ? x : (int)l->len);
+    return u8_width(l->s, x < (int)l->len ? x : (int)l->len);     /* (an emoji or CJK character: two) */
 }
 
 int tb_byte(const textbuf_t* t, int y, int col) {
     if (y < 0 || y >= t->n) return col;
     const tb_line_t* l = &t->lines[y];
-    return u8_byte_at(l->s, (int)l->len, col);
+    return u8_byte_at_col(l->s, (int)l->len, col);
 }
 
 void tb_load(textbuf_t* t, const char* text, uint32_t len) {

@@ -4,6 +4,7 @@
 #include "../kernel/kstring.h"
 #include "../kernel/rtc.h"
 #include "../kernel/tz.h"
+#include "../kernel/calpanel.h"
 
 /* `date` and `timezone`: the clock, set by hand, and the time zone */
 
@@ -204,8 +205,51 @@ static int cmd_timezone(int argc, char** argv) {
     return 1;
 }
 
+static int num(const char* t) { uint32_t v = 0; return k_parse_u32(t, &v) && v < 100000 ? (int)v : -1; }
+
+/* cal [month [year]] | cal year: a month as a calendar, weeks from Monday,
+ * today in reverse (like Linux's cal -m) */
+static int cmd_cal(int argc, char** argv) {
+    rtc_datetime_t now;
+    int ty = 2026, tm = 1, td = 0;
+    if (rtc_read_datetime(&now) == 0) { ty = now.year; tm = now.month; td = now.day; }
+    int y = ty, m = tm;
+    if (argc == 2) {
+        int v = num(argv[1]);
+        if (v >= 1 && v <= 12) m = v;
+        else if (v > 12) { y = v; m = 0; }
+        else { terminal_writeln("usage: cal [month [year]] | cal year"); return 1; }
+    } else if (argc >= 3) {
+        m = num(argv[1]);
+        y = num(argv[2]);
+        if (m < 1 || m > 12 || y < 1) { terminal_writeln("usage: cal [month [year]] | cal year"); return 1; }
+    }
+    for (int mm = m ? m : 1; mm <= (m ? m : 12); mm++) {
+        char head[32];
+        ksnprintf(head, sizeof(head), "%s %d", cal_month_name(mm), y);
+        int pad = (20 - (int)strlen(head)) / 2;
+        for (int i = 0; i < pad; i++) terminal_putchar(' ');
+        terminal_writeln(head);
+        terminal_writeln("Mo Tu We Th Fr Sa Su");
+        int wd = cal_weekday(y, mm, 1), n = cal_days_in_month(y, mm);
+        for (int i = 0; i < wd; i++) terminal_write("   ");
+        for (int d = 1; d <= n; d++) {
+            char t[4];
+            ksnprintf(t, sizeof(t), "%2d", d);
+            if (y == ty && mm == tm && d == td) terminal_write_color(t, VGA_COLOR_BLACK, VGA_COLOR_LIGHT_GREY);
+            else terminal_write(t);
+            if ((wd + d) % 7 == 0) terminal_putchar('\n');
+            else if (d < n) terminal_putchar(' ');
+        }
+        if ((wd + n) % 7) terminal_putchar('\n');
+        if (!m && mm < 12) terminal_putchar('\n');
+    }
+    return 1;
+}
+
 int datecmd_dispatch(int argc, char** argv) {
     if (argc < 1) return 0;
+    if (!strcmp(argv[0], "cal")) return cmd_cal(argc, argv);
     if (!strcmp(argv[0], "date")) return cmd_date(argc, argv);
     if (!strcmp(argv[0], "timezone") || !strcmp(argv[0], "tz")) return cmd_timezone(argc, argv);
     return 0;

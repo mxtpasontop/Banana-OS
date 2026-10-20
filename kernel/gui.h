@@ -84,6 +84,9 @@ int gui_appwin_focused(void);
 /* opens Apps / the Task Manager; 0 if the desktop is not running */
 int gui_open_apps(void);
 int gui_open_taskmgr(void);
+int gui_open_devmgr(void);
+int gui_open_diskmgr(void);
+int gui_open_settings_page(int page);   /* SETTINGS_PAGE_* */
 int gui_open_settings(void);   /* the Settings window (0 without the desktop) */
 int gui_open_settings_app(const char* name);   /* Settings > Apps (name selected, or NULL) */
 void gui_raise_files(void);
@@ -97,7 +100,10 @@ void gui_drag_begin(const char (*paths)[FS_PATH_LEN], int n, int source);
 int  gui_drag_has(const char* dir, const char* name);   /* dir/name is being dragged */
 /* the taskbar: 0 icons and titles, 1 icons only, 2 titles only */
 void gui_set_taskbar_style(int style);
-int  gui_taskbar_style(void);         /* the text size / interface font (Settings > Fonts) */
+int  gui_taskbar_style(void);
+/* the virtual desktops' buttons on the taskbar: shown (1, the default) or not */
+void gui_set_taskbar_desks(int on);
+int  gui_taskbar_desks(void);         /* the text size / interface font (Settings > Fonts) */
 void gui_screen_changed(void);       /* a new resolution (kernel/display.c) */
 
 /* the open windows (taskbar order), for the Task Manager */

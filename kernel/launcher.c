@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "launcher.h"
+#include "i18n.h"
+#include "theme.h"
 #include "gfx.h"
 #include "kstring.h"
 #include "timer.h"
@@ -16,12 +18,12 @@
 #define TILE_H   76
 #define MAX_APPS 48
 
-#define C_PANEL  0x001D232Cu
-#define C_TITLE  0x00384562u
-#define C_TEXT   0x00E8EEF6u
-#define C_DIM    0x00AAB6C6u
-#define C_TILE   0x00262E3Au
-#define C_HOVER  0x00324058u
+#define C_PANEL  TC(0x1D232C)
+#define C_TITLE  TC(0x384562)
+#define C_TEXT   TC(0xE8EEF6)
+#define C_DIM    TC(0xAAB6C6)
+#define C_TILE   TC(0x262E3A)
+#define C_HOVER  TC(0x324058)
 
 static int        g_open;
 static win_geom_t g_win = { .x = 150, .y = 70, .w = 520, .h = 380, .min_w = 280, .min_h = 200 };
@@ -136,10 +138,10 @@ void launcher_rclick(int mx, int my) {
     if (i < 0) return;
     g_menu_app = i;
     ctx_item_t items[] = {
-        { "Open", 1, 0 },
-        { "Details", 2, 0 },
+        { _("Open"), 1, 0 },
+        { _("Details"), 2, 0 },
         { CTX_SEP, 0, 0 },
-        { "Uninstall", 3, 0 },
+        { _("Uninstall"), 3, 0 },
     };
     ctxmenu_open(mx, my, items, 4, menu_cb, NULL);
 }
@@ -178,10 +180,10 @@ void launcher_click(int mx, int my) {
     if (ly >= TOOL_Y && ly < TOOL_Y + 18) {
         if (lx >= 8 && lx < 120) {
             char err[96];
-            if (pkg_run("store", 0, NULL, 1, err, sizeof(err)) >= 0) set_status("Opening the App Store...");
-            else { explorer_open("/home/banana/Examples"); gui_raise_files(); set_status("Double-click a .bpk to install it"); }
+            if (pkg_run("store", 0, NULL, 1, err, sizeof(err)) >= 0) set_status(_("Opening the App Store..."));
+            else { explorer_open("/home/banana/Examples"); gui_raise_files(); set_status(_("Double-click a .bpk to install it")); }
         }
-        else if (lx >= 126 && lx < 206) { rescan(); set_status("Refreshed"); }
+        else if (lx >= 126 && lx < 206) { rescan(); set_status(_("Refreshed")); }
         return;
     }
     /* scroll arrows at the right of the toolbar */
@@ -203,37 +205,37 @@ void launcher_draw(const fb_info_t* fi) {
     (void)fi;
     if (!g_open) return;
     int x = g_win.x, y = g_win.y, W = g_win.w, H = g_win.h;
-    bevel(x, y, W, H, C_PANEL, 0x00505D72u, 0x0010141Cu);
-    bevel(x + 3, y + 3, W - 6, TITLE_H - 1, C_TITLE, 0x00647692u, 0x00111923u);
-    gfx_draw_text(x + 10, y + 7, "Apps", 0x00FFFFFFu, C_TITLE);
+    bevel(x, y, W, H, C_PANEL, TC(0x505D72), TC(0x10141C));
+    bevel(x + 3, y + 3, W - 6, TITLE_H - 1, C_TITLE, TC(0x647692), TC(0x111923));
+    gfx_draw_text(x + 10, y + 7, _("Apps"), TC(0xFFFFFF), C_TITLE);
     win_draw_buttons(&g_win, 4, 12);
     kbnav_begin(&g_nav);
     kbnav_add(&g_nav, x + 8, y + TOOL_Y, 112, 18);
     kbnav_add(&g_nav, x + 126, y + TOOL_Y, 80, 18);
 
-    bevel(x + 8, y + TOOL_Y, 112, 18, 0x00303740u, 0x00535D6Eu, 0x0015191Fu);
-    gfx_draw_text(x + 16, y + TOOL_Y + 5, "Get apps...", C_TEXT, 0x00303740u);
-    bevel(x + 126, y + TOOL_Y, 80, 18, 0x00303740u, 0x00535D6Eu, 0x0015191Fu);
-    gfx_draw_text(x + 138, y + TOOL_Y + 5, "Refresh", C_TEXT, 0x00303740u);
+    bevel(x + 8, y + TOOL_Y, 112, 18, TC(0x303740), TC(0x535D6E), TC(0x15191F));
+    gfx_draw_text(x + 16, y + TOOL_Y + 5, _("Get apps..."), C_TEXT, TC(0x303740));
+    bevel(x + 126, y + TOOL_Y, 80, 18, TC(0x303740), TC(0x535D6E), TC(0x15191F));
+    gfx_draw_text(x + 138, y + TOOL_Y + 5, _("Refresh"), C_TEXT, TC(0x303740));
 
     if (g_napps == 0) {
-        gfx_draw_text(x + 16, y + GRID_Y + 10, "No apps installed yet.", C_TEXT, C_PANEL);
-        gfx_draw_text(x + 16, y + GRID_Y + 30, "Get apps... opens the App Store; or double-click a .bpk", C_DIM, C_PANEL);
-        gfx_draw_text(x + 16, y + GRID_Y + 44, "(try ~/Examples, a USB stick in /mnt/usb, or a", C_DIM, C_PANEL);
-        gfx_draw_text(x + 16, y + GRID_Y + 58, "download), or type: pkg install <file.bpk>", C_DIM, C_PANEL);
-        gfx_draw_text(x + 16, y + GRID_Y + 82, "Build your own with the Linux SDK (sdk/).", C_DIM, C_PANEL);
+        gfx_draw_text(x + 16, y + GRID_Y + 10, _("No apps installed yet."), C_TEXT, C_PANEL);
+        gfx_draw_text(x + 16, y + GRID_Y + 30, _("Get apps... opens the App Store; or double-click a .bpk"), C_DIM, C_PANEL);
+        gfx_draw_text(x + 16, y + GRID_Y + 44, _("(try ~/Examples, a USB stick in /mnt/usb, or a"), C_DIM, C_PANEL);
+        gfx_draw_text(x + 16, y + GRID_Y + 58, _("download), or type: pkg install <file.bpk>"), C_DIM, C_PANEL);
+        gfx_draw_text(x + 16, y + GRID_Y + 82, _("Build your own with the Linux SDK (sdk/)."), C_DIM, C_PANEL);
     }
     for (int i = 0; i < g_napps; i++) {
         int tx, ty;
         if (!tile_rect(i, &tx, &ty)) continue;
-        bevel(tx, ty, TILE_W, TILE_H, C_TILE, 0x00404C60u, 0x00141920u);
+        bevel(tx, ty, TILE_W, TILE_H, C_TILE, TC(0x404C60), TC(0x141920));
         kbnav_add(&g_nav, tx, ty, TILE_W, TILE_H);
         uint32_t ic = name_color(g_apps[i].name);
         int ix = tx + (TILE_W - 32) / 2;
-        bevel(ix, ty + 8, 32, 32, ic, 0x00FFFFFFu & (ic + 0x00303030u), 0x00101010u);
+        bevel(ix, ty + 8, 32, 32, ic, 0x00FFFFFFu & (ic + TC(0x303030)), TC(0x101010));
         char letter[2] = { g_apps[i].title[0], 0 };
         if (letter[0] >= 'a' && letter[0] <= 'z') letter[0] -= 32;
-        gfx_draw_text_scaled(ix + 8, ty + 16, 2, letter, 0x00FFFFFFu, ic);
+        gfx_draw_text_scaled(ix + 8, ty + 16, 2, letter, TC(0xFFFFFF), ic);
         char t[15];                       /* 14 characters fit a tile */
         kstrlcpy(t, g_apps[i].title, sizeof(t));
         int tl = (int)strlen(t);
@@ -248,15 +250,15 @@ void launcher_draw(const fb_info_t* fi) {
                   g_scroll + rows_visible(), total_rows);
         gfx_draw_text(x + 220, y + TOOL_Y + 5, more, C_DIM, C_PANEL);
     }
-    gfx_fill_rect(x + 3, y + H - 18, W - 6, 15, 0x00161B22u);
+    gfx_fill_rect(x + 3, y + H - 18, W - 6, 15, TC(0x161B22));
     char st[120];
     if (g_status[0]) kstrlcpy(st, g_status, sizeof(st));
     else ksnprintf(st, sizeof(st), "%d app%s - click to open, right-click for more", g_napps, g_napps == 1 ? "" : "s");
     int maxc = (W - 24) / 8;
     if (maxc < (int)sizeof(st) && maxc > 0) st[maxc] = 0;
-    gfx_draw_text(x + 8, y + H - 14, st, C_DIM, 0x00161B22u);
+    gfx_draw_text(x + 8, y + H - 14, st, C_DIM, TC(0x161B22));
     gfx_draw_grip(x + W, y + H);
-    kbnav_draw(&g_nav, 0x00FFD34Eu);
+    kbnav_draw(&g_nav, TC(0xFFD34E));
 }
 
 /* the window manager (kernel/gui.c) moves, snaps and maximizes it through its geometry */

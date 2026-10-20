@@ -37,7 +37,14 @@ int pci_find(uint16_t vendor, uint16_t device, pci_dev_t* out);
  * I/O BARs return the port base; *is_io tells which. */
 uintptr_t pci_bar(const pci_dev_t* d, int bar, int* is_io);
 
-/* Enables I/O + memory decoding and bus mastering (needed for DMA). */
-void pci_enable(const pci_dev_t* d);
+/* Enables I/O + memory decoding and bus mastering (needed for DMA). The
+ * driver taking the device is remembered by its source file ("net/e1000.c"
+ * -> "e1000"): Device Manager shows it. */
+void pci_enable_from(const pci_dev_t* d, const char* file);
+#define pci_enable(d) pci_enable_from((d), __FILE__)
+/* the driver that enabled bus:dev.fn ("e1000"), or NULL */
+const char* pci_driver_of(uint8_t bus, uint8_t dev, uint8_t fn);
+/* a driver that drives a device without pci_enable() says so */
+void pci_claim(const pci_dev_t* d, const char* driver);
 
 #endif

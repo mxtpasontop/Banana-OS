@@ -224,6 +224,7 @@ static void fb_draw_cell(size_t row, size_t col) {
         cp = vt_chars[CONSOLE_VT][v][col];
         color = vt_colors[CONSOLE_VT][v][col];
     }
+    if (cp == TERMINAL_WIDE_CONT) return;               /* (drawn with its first half) */
     int scale = term_fb_scale < 1 ? 1 : term_fb_scale;
     gfx_draw_char_scaled_cp((int)col * 8 * scale, (int)row * 8 * scale, scale, cp,
                          vga_color_rgb(color & 0x0F), vga_color_rgb((color >> 4) & 0x0F));
@@ -239,13 +240,15 @@ static void fb_draw_cursor_overlay(size_t row, size_t col) {
     uint8_t color = vt_colors[CONSOLE_VT][row][col];
     int scale = term_fb_scale < 1 ? 1 : term_fb_scale;
     int x = (int)col * 8 * scale, y = (int)row * 8 * scale, h = (scale > 1) ? 2 : 1;
+    int cells = col + 1 < FB_MAX_COLS && vt_chars[CONSOLE_VT][row][col + 1] == TERMINAL_WIDE_CONT ? 2 : 1;
     uint32_t fg = vga_color_rgb(color & 0x0F);
     switch (vt_cshape[CONSOLE_VT]) {
     case TERM_CURSOR_BLOCK:                             /* the character in reverse */
+        gfx_fill_rect(x, y, 8 * scale * cells, 8 * scale, fg);
         gfx_draw_char_scaled_cp(x, y, scale, vt_chars[CONSOLE_VT][row][col], vga_color_rgb((color >> 4) & 0x0F), fg);
         break;
     case TERM_CURSOR_BAR: gfx_fill_rect(x, y, h, 8 * scale, fg); break;
-    default: gfx_fill_rect(x, y + (8 * scale - h), 8 * scale, h, fg); break;
+    default: gfx_fill_rect(x, y + (8 * scale - h), 8 * scale * cells, h, fg); break;
     }
 }
 
@@ -871,6 +874,64 @@ const char* terminal_vt_title(int vt) { return vt >= 0 && vt < VT_MAX ? vt_title
 int terminal_vt_cursor_shape(int vt) { return vt >= 0 && vt < VT_MAX ? vt_cshape[vt] : 0; }
 int terminal_vt_cursor_shown(int vt) { return vt >= 0 && vt < VT_MAX ? !es_cursor_off[vt] : 1; }
 
+/* A wide character fills two cells (itself, then TERMINAL_WIDE_CONT):
+ * writing over either half blanks the other one */
+static void unwide(int v, size_t row, size_t col, size_t w) {
+    uint32_t* line = vt_chars[v][row];
+    if (line[col] == TERMINAL_WIDE_CONT) {
+        if (col > 0) line[col - 1] = ' ';
+    } else if (col + 1 < w && line[col + 1] == TERMINAL_WIDE_CONT) {
+        line[col + 1] = ' ';
+    }
+}
+
+/* a printable character (cw columns) into the active vt's grid at the
+ * cursor, which moves past it. A wide one with only the last column left
+ * goes to the next line, like xterm's. */
+static void grid_put(uint32_t cp, int cw, size_t w, size_t h) {
+    int v = (int)vt_active;
+    if (w > FB_MAX_COLS) w = FB_MAX_COLS;
+    if (term_row >= FB_MAX_ROWS || term_col >= w) return;
+    if (cw == 2 && term_col + 1 >= w) {
+        unwide(v, term_row, term_col, w);
+        vt_chars[v][term_row][term_col] = ' ';
+        vt_colors[v][term_row][term_col] = vt_color[v];
+        if (fb_console_target()) mark_dirty(term_row);
+        term_col = 0;
+        if (++term_row == h) terminal_scroll();
+    }
+    size_t row = term_row, col = term_col;
+    if (row >= FB_MAX_ROWS || col >= w || col + (size_t)cw > w) return;
+    unwide(v, row, col, w);
+    if (cw == 2) unwide(v, row, col + 1, w);
+    vt_chars[v][row][col] = cp;
+    vt_colors[v][row][col] = vt_color[v];
+    if (cw == 2) {
+        vt_chars[v][row][col + 1] = TERMINAL_WIDE_CONT;
+        vt_colors[v][row][col + 1] = vt_color[v];
+    }
+    if (fb_console_target()) mark_dirty(row);
+    term_col = col + (size_t)cw;
+    if (term_col >= w) {
+        term_col = 0;
+        if (++term_row == h) terminal_scroll();
+    }
+}
+
+/* backspace: one character left (both cells of a wide one), blanked */
+static void grid_back(void) {
+    int v = (int)vt_active;
+    size_t col = term_col, row = term_row;
+    if (col == 0 || col > FB_MAX_COLS || row >= FB_MAX_ROWS) return;
+    col--;
+    if (col > 0 && vt_chars[v][row][col] == TERMINAL_WIDE_CONT) col--;
+    unwide(v, row, col, FB_MAX_COLS);
+    vt_chars[v][row][col] = ' ';
+    vt_colors[v][row][col] = vt_color[v];
+    term_col = col;
+    if (fb_console_target()) mark_dirty(term_row);
+}
+
 void terminal_putchar(char c) {
     if (capturing()) { capture_putc(c); return; }
     g_term_gen++;
@@ -890,7 +951,8 @@ void terminal_putchar(char c) {
         return;
     }
 
-    /* text is UTF-8: é comes as two bytes, € as three, and each fills one cell */
+    /* text is UTF-8: é comes as two bytes, € as three, and each fills one
+     * cell - an emoji or CJK character two (u8_wcwidth) */
     uint32_t cp = (unsigned char)c;
     {
         unsigned char b = (unsigned char)c;
@@ -921,6 +983,12 @@ void terminal_putchar(char c) {
         if (vt_active == CONSOLE_VT && fb_console_on()) { mark_all_dirty(); g_pending_scroll = 0; }
     }
 
+    int cw = 1;
+    if (cp >= 0x300) {
+        cw = u8_wcwidth(cp);
+        if (!cw) return;                          /* a combining mark, a joiner: nothing to draw */
+    }
+
     size_t h = terminal_usable_height();
     if (h == 0) return;
     size_t w = terminal_width();
@@ -933,20 +1001,9 @@ void terminal_putchar(char c) {
         } else if (c == '\r') {
             term_col = 0;
         } else if (c == '\b') {
-            if (term_col > 0) {
-                term_col--;
-                vt_chars[CONSOLE_VT][term_row][term_col] = ' ';
-                vt_colors[CONSOLE_VT][term_row][term_col] = vt_color[CONSOLE_VT];
-                mark_dirty(term_row);
-            }
+            grid_back();
         } else {
-            vt_chars[CONSOLE_VT][term_row][term_col] = cp;
-            vt_colors[CONSOLE_VT][term_row][term_col] = vt_color[CONSOLE_VT];
-            mark_dirty(term_row);
-            if (++term_col == w) {
-                term_col = 0;
-                if (++term_row == h) terminal_scroll();
-            }
+            grid_put(cp, cw, w, h);
         }
         vt_row[CONSOLE_VT] = term_row;
         vt_col[CONSOLE_VT] = term_col;
@@ -966,21 +1023,12 @@ void terminal_putchar(char c) {
         }
         if (c == '\r') { term_col = 0; return; }
         if (c == '\b') {
-            if (term_col > 0) {
-                term_col--;
-                vt_chars[vt_active][term_row][term_col] = ' ';
-                vt_colors[vt_active][term_row][term_col] = vt_color[vt_active];
-                vt_row[vt_active] = term_row;
-                vt_col[vt_active] = term_col;
-            }
+            grid_back();
+            vt_row[vt_active] = term_row;
+            vt_col[vt_active] = term_col;
             return;
         }
-        vt_chars[vt_active][term_row][term_col] = cp;
-        vt_colors[vt_active][term_row][term_col] = vt_color[vt_active];
-        if (++term_col == w) {
-            term_col = 0;
-            if (++term_row == h) terminal_scroll();
-        }
+        grid_put(cp, cw, w, h);
         vt_row[vt_active] = term_row;
         vt_col[vt_active] = term_col;
         return;
@@ -1008,12 +1056,13 @@ void terminal_putchar(char c) {
         return;
     }
 
-    term_buf[term_row * VGA_WIDTH + term_col] = vga_entry(vga_glyph(cp), term_color);
-
-    if (++term_col == w) {
-        term_col = 0;
-        if (++term_row == h)
-            terminal_scroll();
+    for (int k = 0; k < cw; k++) {               /* (a wide character: its stand-in and a blank) */
+        term_buf[term_row * VGA_WIDTH + term_col] = vga_entry(k ? ' ' : vga_glyph(cp), term_color);
+        if (++term_col == w) {
+            term_col = 0;
+            if (++term_row == h)
+                terminal_scroll();
+        }
     }
     vt_row[vt_active] = term_row;
     vt_col[vt_active] = term_col;
@@ -1043,6 +1092,8 @@ void terminal_cursor_left(void) {
     if (term_col > 0) {
         size_t old_row = term_row, old_col = term_col;
         term_col--;
+        if (term_col > 0 && term_mode != TERMINAL_MODE_VGA_TEXT && vt_chars[vt_active][term_row][term_col] == TERMINAL_WIDE_CONT)
+            term_col--;                           /* (onto the wide character's first half) */
         if (term_mode != TERMINAL_MODE_FRAMEBUFFER) terminal_update_cursor();
         else fb_refresh_cursor(old_row, old_col);
     }
@@ -1054,6 +1105,8 @@ void terminal_cursor_right(void) {
     if (term_col + 1 < w) {
         size_t old_row = term_row, old_col = term_col;
         term_col++;
+        if (term_col + 1 < w && term_mode != TERMINAL_MODE_VGA_TEXT && vt_chars[vt_active][term_row][term_col] == TERMINAL_WIDE_CONT)
+            term_col++;                           /* (past a wide character) */
         if (term_mode != TERMINAL_MODE_FRAMEBUFFER) terminal_update_cursor();
         else fb_refresh_cursor(old_row, old_col);
     }
@@ -1101,6 +1154,8 @@ static void putentry_cp(uint32_t cp, uint8_t fg, uint8_t bg, size_t row, size_t 
     if (row >= VGA_HEIGHT || col >= VGA_WIDTH) return;
     if (term_mode == TERMINAL_MODE_FRAMEBUFFER && gfx_available()) {
         uint8_t color = vga_entry_color(fg, bg);
+        if (cp != TERMINAL_WIDE_CONT) unwide((int)vt_active, row, col, FB_MAX_COLS);
+        else if (col + 1 < FB_MAX_COLS && vt_chars[vt_active][row][col + 1] == TERMINAL_WIDE_CONT) vt_chars[vt_active][row][col + 1] = ' ';
         vt_chars[vt_active][row][col] = cp;
         vt_colors[vt_active][row][col] = color;
         if (vt_active == CONSOLE_VT) { mark_dirty(row); terminal_flush(); }
@@ -1108,15 +1163,21 @@ static void putentry_cp(uint32_t cp, uint8_t fg, uint8_t bg, size_t row, size_t 
     }
 
     uint8_t color = vga_entry_color(fg, bg);
-    term_buf[row * VGA_WIDTH + col] = vga_entry(vga_glyph(cp), color);
+    term_buf[row * VGA_WIDTH + col] = vga_entry(cp == TERMINAL_WIDE_CONT ? ' ' : vga_glyph(cp), color);
 }
 
 void terminal_write_at(const char* str, uint8_t fg, uint8_t bg, size_t row, size_t col) {
     if (!str) return;
     size_t x = col;
     int len = (int)strlen(str);
-    for (int i = 0; i < len && x < VGA_WIDTH; x++)
-        putentry_cp(u8_decode(str, len, &i), fg, bg, row, x);          /* (a UTF-8 character a cell) */
+    for (int i = 0; i < len && x < VGA_WIDTH; ) {
+        uint32_t cp = u8_decode(str, len, &i);                         /* (a UTF-8 character a cell, */
+        int cw = u8_wcwidth(cp);                                       /*  a wide one two) */
+        if (!cw) continue;
+        if (cw == 2 && x + 1 >= VGA_WIDTH) break;
+        putentry_cp(cp, fg, bg, row, x++);
+        if (cw == 2) putentry_cp(TERMINAL_WIDE_CONT, fg, bg, row, x++);
+    }
 }
 
 void terminal_screen_changed(void) {
@@ -1255,6 +1316,9 @@ void terminal_vt_set_size(int vt, int cols, int rows) {
                 vt_chars[vt][y][x] = ' ';
                 vt_colors[vt][y][x] = vt_color[vt];
             }
+    if (cols < FB_MAX_COLS)                       /* (no wide character cut in half at the edge) */
+        for (size_t y = 0; y < (size_t)rows; y++)
+            if (vt_chars[vt][y][cols] == TERMINAL_WIDE_CONT) { vt_chars[vt][y][cols] = ' '; vt_chars[vt][y][cols - 1] = ' '; }
     if (vt_col[vt] >= (size_t)cols) vt_col[vt] = (size_t)cols - 1;
     vt_cols[vt] = (size_t)cols;
     vt_rows[vt] = (size_t)rows;

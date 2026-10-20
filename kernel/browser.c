@@ -97,6 +97,10 @@ static int        g_addr_focus, g_addr_all;  /* address bar focused; its text al
 static uint32_t   g_dl_seen;                 /* dlm_gen() when the downloads page was last opened */
 static int        g_dl_new;                  /* a download finished since: a dot on the button */
 static int        g_dl_announced;            /* the newest finished download told in the status line */
+/* the download the status line follows (its progress, then its end) */
+static int        g_dl_follow;
+static void*      g_dl_follow_tab;
+static char       g_dl_follow_msg[200];       /* what it last said: another message replaces it, and it stops */
 static char       g_go_url[URL_MAX];        /* CMD_GO / CMD_NEWTAB target */
 static char       g_alert[256];
 
@@ -1234,10 +1238,14 @@ static void hand_to_manager(tab_t* t, const char* url, const char* fname) {
     char path[FS_PATH_LEN], msg[200];
     download_path(fname && fname[0] ? fname : "download", path, sizeof(path));
     g_status_tab = t;
-    if (dlm_start(url, path) < 0) set_status("Cannot start the download (too many at once)", 1);
+    int id = dlm_start(url, path);
+    if (id < 0) set_status("Cannot start the download (too many at once)", 1);
     else {
         ksnprintf(msg, sizeof(msg), "Downloading %s - the arrow (or Ctrl+J) shows your downloads", strrchr(path, '/') + 1);
         set_status(msg, 0);
+        g_dl_follow = id;
+        g_dl_follow_tab = t;
+        kstrlcpy(g_dl_follow_msg, t->status, sizeof(g_dl_follow_msg));
     }
     g_status_tab = NULL;
     g_gen++;
@@ -2196,13 +2204,38 @@ static void draw_dl_button(int x, int y) {
 static void watch_downloads(void) {
     static uint32_t last_gen, last_tick;
     static int started;
-    if (!started) {                              /* the list from earlier sessions: nothing to tell */
-        dlm_info_t d0;
-        started = 1;
-        if (dlm_get(0, &d0)) g_dl_announced = d0.id;
+    if (!started) {                              /* the list from earlier starts: nothing to tell */
+        started = 1;                             /* (this start's are told, even one begun before this first look) */
+        g_dl_announced = dlm_session_base() - 1;
     }
     uint32_t gen = dlm_gen();
-    if (dlm_running(NULL, NULL) && timer_ms() - last_tick >= 250) { last_tick = timer_ms(); g_gen++; }   /* (the bar moves) */
+    if (dlm_running(NULL, NULL) && timer_ms() - last_tick >= 250) {
+        last_tick = timer_ms();
+        g_gen++;                                 /* (the bar moves) */
+        /* the status line follows the download it announced: how far it is */
+        tab_t* ft = NULL;
+        for (int i = 0; i < g_ntabs; i++) if ((void*)g_tabs[i] == g_dl_follow_tab) ft = g_tabs[i];
+        dlm_info_t f;
+        if (g_dl_follow && ft && !strcmp(ft->status, g_dl_follow_msg) && dlm_find(g_dl_follow, &f) &&
+            (f.state == DLM_RUNNING || f.state == DLM_QUEUED)) {
+            char msg[200], got[24], tot[24], rate[24];
+            fmt_bytes(f.got, got, sizeof(got));
+            if (f.state == DLM_QUEUED) ksnprintf(msg, sizeof(msg), "Waiting to download %s (another one runs) - Ctrl+J shows your downloads", f.name);
+            else if (f.total) {
+                fmt_bytes(f.total, tot, sizeof(tot));
+                fmt_bytes(f.rate, rate, sizeof(rate));
+                ksnprintf(msg, sizeof(msg), "Downloading %s - %s of %s (%u%%)%s%s/s - Ctrl+J shows your downloads", f.name, got, tot,
+                          (uint32_t)((uint64_t)f.got * 100u / f.total), f.rate ? ", " : "", f.rate ? rate : "");
+                if (!f.rate) { char* s = strstr(msg, "/s - "); if (s) memmove(s, s + 2, strlen(s + 2) + 1); }
+            } else ksnprintf(msg, sizeof(msg), "Downloading %s - %s so far - Ctrl+J shows your downloads", f.name, got);
+            if (strcmp(msg, g_dl_follow_msg)) {
+                g_status_tab = ft;
+                set_status(msg, 0);
+                g_status_tab = NULL;
+                kstrlcpy(g_dl_follow_msg, ft->status, sizeof(g_dl_follow_msg));
+            }
+        }
+    }
     if (gen == last_gen) return;
     last_gen = gen;
     dlm_info_t d;
@@ -2217,7 +2250,11 @@ static void watch_downloads(void) {
             ksnprintf(msg, sizeof(msg), "Downloaded %s (%s) - the arrow (or Ctrl+J) shows your downloads", d.name, sz);
             g_dl_new = 1;
         } else ksnprintf(msg, sizeof(msg), "Download failed: %s - %s", d.name, d.err);
-        g_status_tab = cur_tab();
+        /* told where it was started (if that tab is still there), else in the one shown */
+        tab_t* where = cur_tab();
+        for (int k = 0; k < g_ntabs; k++) if (d.id == g_dl_follow && (void*)g_tabs[k] == g_dl_follow_tab) where = g_tabs[k];
+        if (d.id == g_dl_follow) g_dl_follow = 0;
+        g_status_tab = where;
         set_status(msg, d.state != DLM_DONE);
         g_status_tab = NULL;
         break;
@@ -2308,12 +2345,12 @@ static void ic_lock(int x, int y, uint32_t c, uint32_t bg) {
 static int addr_part(int x, int y, const char* s, int n, int maxc, uint32_t fg, uint32_t bg) {
     char buf[200];
     if (n <= 0 || maxc <= 0) return 0;
-    int nb = u8_byte_at(s, n, maxc);
+    int nb = u8_byte_at_col(s, n, maxc);
     if (nb > (int)sizeof(buf) - 1) nb = (int)sizeof(buf) - 1;
     memcpy(buf, s, (size_t)nb);
     buf[nb] = 0;
     gfx_draw_text(x, y, buf, fg, bg);
-    return u8_cols(buf, nb);
+    return u8_width(buf, nb);
 }
 
 /* the address bar: focused, the text being edited with its caret (all of
@@ -2335,15 +2372,15 @@ static void draw_addr_bar(tab_t* t, int x0, int ty, int aw) {
         int maxc = (aw - 12) / 8;
         if (g_addr_cur > len) g_addr_cur = len;
         if (g_addr_view > g_addr_cur) g_addr_view = g_addr_cur;
-        while (u8_cols(a + g_addr_view, g_addr_cur - g_addr_view) > maxc - 1) g_addr_view = u8_next(a, len, g_addr_view);
+        while (u8_width(a + g_addr_view, g_addr_cur - g_addr_view) > maxc - 1) g_addr_view = u8_next(a, len, g_addr_view);
         int from = g_addr_all ? 0 : g_addr_view;
         if (g_addr_all && len) {
-            int cols = u8_cols(a, u8_byte_at(a, len, maxc));
+            int cols = u8_width(a, u8_byte_at_col(a, len, maxc));
             gfx_fill_rect(x0 + 4, ty + 4, cols * 8 + 2, 12, 0x00B4D5FEu);
             addr_part(x0 + 5, ty + 6, a, len, maxc, 0x00101010u, 0x00B4D5FEu);
         } else {
             addr_part(x0 + 5, ty + 6, a + from, len - from, maxc, 0x00101010u, abg);
-            gfx_fill_rect(x0 + 5 + u8_cols(a + g_addr_view, g_addr_cur - g_addr_view) * 8, ty + 4, 1, 12, 0x00202020u);
+            gfx_fill_rect(x0 + 5 + u8_width(a + g_addr_view, g_addr_cur - g_addr_view) * 8, ty + 4, 1, 12, 0x00202020u);
         }
         return;
     }
@@ -2556,7 +2593,7 @@ void browser_click(int mx, int my) {
                 g_addr_focus = 1;
                 g_addr_all = 0;
                 if (g_addr_view > len) g_addr_view = len;
-                g_addr_cur = g_addr_view + u8_byte_at(t->addr + g_addr_view, len - g_addr_view, col < 0 ? 0 : col);
+                g_addr_cur = g_addr_view + u8_byte_at_col(t->addr + g_addr_view, len - g_addr_view, col < 0 ? 0 : col);
             }
         }
         else if (lx >= ADDR_X + aw + 48 && lx < ADDR_X + aw + 48 + DLBTN_W) push_cmd(CMD_DOWNLOADS, 0, 0);

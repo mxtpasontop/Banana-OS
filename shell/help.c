@@ -224,6 +224,24 @@ static const page_t PAGES[] = {
       "changes which, keeping the time. Settings > Date & time does the same with the mouse.",
       "-u|the time in UTC\n-a|local time, UTC, and what the clock chip keeps",
       "date set 2026-10-17 18:30\ndate set 9:05\ndate utc on", "timezone" },
+    { "language", "desktop", "language [en | fr | de | it | rm]", "the desktop's language",
+      "English (the default), French (fr), German (de), Italian (it) or Romansh (rm): menus, windows, Settings, the installer. A text not "
+      "translated yet shows in English; commands stay in English. Settings > Language does the same; apps built "
+      "with the SDK read it with banana_language().",
+      NULL, "language fr\nlanguage en", "keyboardctl" },
+    { "theme", "desktop", "theme [list | set NAME | show [NAME] | install FILE | new NAME [FILE] | check FILE | taskmgr STYLE]",
+      "the desktop's colours",
+      "A theme colours windows, the taskbar, the Start menu, menus and the built-in apps, and may bring a wallpaper. "
+      "Built in: Banana Dark, Light, Midnight, Ocean, Forest, Banana, Sakura, High Contrast. theme new writes a copy "
+      "of the theme in use to change in Notepad; theme check finds mistakes and hard-to-read colours; theme install "
+      "takes a .theme or a .btheme (a ZIP with its picture). Settings > Themes does the same with the mouse. On Linux, "
+      "sdk/tools/bananatheme makes, checks, previews and packs themes (sdk/themes/README.md). A theme also picks Task Manager's look - Banana OS, Windows classic, Windows 10 or Windows 11; theme taskmgr STYLE (or Settings > Themes) chooses another, theme taskmgr theme goes back to the theme's.",
+      NULL, "theme set Ocean\ntheme new Mine\ntheme install Mine.theme\ntheme taskmgr classic", "settings" },
+    { "cal", "system", "cal [month [year]] | cal year", "a month as a calendar",
+      "A month as a calendar, weeks from Monday, today marked: this month with nothing, another with its "
+      "number (and year), a whole year with only the year. On the desktop, a click on the taskbar's clock "
+      "opens the same calendar in a panel.",
+      NULL, "cal\ncal 2 2028\ncal 2027", "date" },
     { "timezone", "system", "timezone [list [words] | <zone or place>]", "the time zone",
       "With nothing, the zone in use and its offset from UTC. timezone list shows every zone (words: only "
       "those naming them); timezone Europe/Paris, or a place - timezone tokyo - sets it: the time does not "
@@ -361,7 +379,8 @@ static const page_t PAGES[] = {
       "top, move to another desktop); Alt+drag moves a window from anywhere. Four virtual desktops: the switcher on "
       "the taskbar, Win+Ctrl+Left / Right, Win+Ctrl+Shift+Left / Right takes the front window along. Alt+Tab, Win+Tab "
       "(task view), Win+D (the desktop), Win+V (the clipboard history: the last 25 texts copied - Enter pastes one, "
-      "Delete removes it, P pins it to keep it), Alt+F4.",
+      "Delete removes it, P pins it to keep it), Win+. or Win+; (emoji: type to search, Tab changes the group, "
+      "Enter or a click types the emoji into the window in front), Alt+F4.",
       NULL, NULL, "stopx" },
     { "stopx", "desktop", "stopx", "leave the desktop (stop is the same)", NULL, NULL, NULL, "startx" },
     { "start", "desktop", "start", "the same as startx", NULL, NULL, NULL, "startx" },
@@ -381,6 +400,50 @@ static const page_t PAGES[] = {
       "Without a graphics driver for the card, the size changes from the next start.", NULL, "resolution 1920x1080", "lsgpu" },
     { "exit", "desktop", "exit", "close this terminal window (or end an SSH session)", NULL, NULL, NULL, NULL },
     /* ── hardware ── */
+    { "diskmgr", "disks", "diskmgr [list | show DISK | init DISK mbr|gpt | create DISK [SIZE] [fat32|exfat] [LABEL] | format DISK[pN] fat32|exfat [LABEL] | delete DISKpN | mount DISKpN | unmount DISKpN | gui]",
+      "Disk Management: partitions, formatting",
+      "Shows the disks - their size, partition table (MBR or GPT), partitions, free space, and what each volume holds "
+      "(FAT32, exFAT, NTFS, ext4...), its name and where it is mounted - and changes them: init writes a new, empty "
+      "partition table; create makes a volume in the biggest free space (or freeN, as show numbers them) of SIZE (500M, 2G, "
+      "all: the default) and formats it; format formats a partition (or a whole disk without a table) as FAT32 (every "
+      "computer reads it, files up to 4 GB; 33 MB at least) or exFAT (big files); delete removes a partition. The changes "
+      "erase what is there, so they ask for -y. The disk Banana OS runs from and CD drives are never changed. gui (or "
+      "diskmgmt.msc) opens the Disk Management window; it is also in the Start menu (All Programs) and the desktop's menu.",
+      "-y|go ahead with a change that erases data",
+      "diskmgr list\ndiskmgr init usb0 gpt -y\ndiskmgr create usb0 2G exfat PHOTOS -y\ndiskmgr format usb0p1 fat32 STICK -y\ndiskmgr delete sata1p2 -y",
+      "lsblk, mount, umount, mkfs.fat" },
+    { "diskpart", "disks", "diskpart", "the same as diskmgr", NULL, NULL, NULL, "diskmgr" },
+    { "diskmgmt.msc", "disks", "diskmgmt.msc", "the Disk Management window", NULL, NULL, NULL, "diskmgr" },
+    { "mkfs.fat", "disks", "mkfs.fat [-n LABEL] DISK[pN]", "format as FAT32 (mkfs.vfat too)",
+      "Formats a partition (usb0p1) or a whole disk without a partition table (usb0) as FAT32, as Linux's mkfs.fat does. "
+      "Never the disk Banana OS runs from.", "-n LABEL|the volume's name (11 letters)", "mkfs.fat -n STICK usb0p1", "mkfs.exfat, diskmgr" },
+    { "mkfs.vfat", "disks", "mkfs.vfat [-n LABEL] DISK[pN]", "the same as mkfs.fat", NULL, NULL, NULL, "mkfs.fat" },
+    { "mkfs.exfat", "disks", "mkfs.exfat [-n LABEL] DISK[pN]", "format as exFAT",
+      "Formats a partition or a whole disk without a partition table as exFAT (files bigger than 4 GB; read by Windows, "
+      "macOS and Linux).", "-n LABEL|the volume's name (11 letters)", "mkfs.exfat -n BIG usb0p1", "mkfs.fat, diskmgr" },
+    { "devmgr", "hardware", "devmgr [-c | show N|NAME | problems | rescan | gui]", "Device Manager: every device and its driver",
+      "Lists the computer's devices by type, as Windows' Device Manager does - disk drives, display adapters, keyboards, "
+      "network adapters, processors, USB controllers... - with the driver that runs each one; ! marks a device with no driver "
+      "(under Other devices). -c shows them by connection: each under the bridge, controller or hub it is plugged into. "
+      "show prints one device's properties: maker, location, status, driver, hardware ID (PCI\\VEN_8086&DEV_100E...) and "
+      "resources (IRQ, memory and I/O ranges). gui (or devmgmt.msc) opens the Device Manager window; it is also in the Start "
+      "menu (All Programs) and the desktop's right-click menu.",
+      "-c|by connection\nshow N|one device's properties (its number, part of its name, or its driver)\nproblems|the devices without a driver\nrescan|look for USB devices plugged in or out first\ngui|the window",
+      "devmgr\ndevmgr -c\ndevmgr show e1000\ndevmgr gui", "lspci, lsusb, lsblk, drivers" },
+    { "lsdev", "hardware", "lsdev", "the same as devmgr", NULL, NULL, NULL, "devmgr" },
+    { "devmgmt.msc", "hardware", "devmgmt.msc", "the Device Manager window", NULL, NULL, NULL, "devmgr" },
+    { "gpu", "hardware", "gpu experimental [on | off]", "experimental graphics drivers",
+      "Turns on (or off) the graphics drivers written without the hardware to try them on: for AMD Radeon HD 5000 / 6000 / "
+      "7000 TeraScale 2 cards (the HD 7450...) and RX 400 / 500 Polaris cards (the RX 580...), a hardware mouse pointer and "
+      "vsync over the firmware's screen. The driver first checks that the card scans out exactly the screen the firmware "
+      "handed over, else it leaves the card alone. The choice is kept; off takes effect at the next start. With no word: "
+      "whether it is on and what the driver found. Intel HD Graphics (1st to 8th generation Core) need no switch: their "
+      "driver is always on. NVIDIA cards keep the firmware's screen.",
+      NULL, "gpu experimental on\ngpu experimental", "lsgpu, devmgr" },
+    { "lspci", "hardware", "lspci [-v] [-n]", "the PCI devices, as Linux's lspci",
+      "One line per PCI function: its address (bus:device.function), class, maker, name and IDs. -v adds its interrupt, "
+      "its memory and I/O regions and the Banana OS driver in use; -n prints the numbers only.",
+      "-v|interrupt, regions, driver\n-n|numeric IDs", "lspci\nlspci -v", "devmgr, lsusb" },
     { "lsusb", "hardware", "lsusb", "USB controllers and devices", NULL, NULL, NULL, "usb" },
     { "usb", "hardware", "usb rescan", "look for USB devices plugged in or out", NULL, NULL, NULL, "lsusb" },
     { "usbctl", "hardware", "usbctl", "USB legacy handoff state", NULL, NULL, NULL, NULL },
@@ -390,7 +453,7 @@ static const page_t PAGES[] = {
     { "gpu_info", "hardware", "gpu_info [-n -r -b -p -m]", "the framebuffer", NULL, NULL, NULL, "lsgpu" },
     { "brightness", "hardware", "brightness [0-100]", "a laptop panel's backlight (Intel graphics)", NULL, NULL, NULL, NULL },
     { "keyboardctl", "hardware", "keyboardctl [layout]", "the keyboard layout",
-      "Shows or sets it: EN (Default) - the US keyboard -, UK, US-Intl (US international: dead accents), FR (AZERTY), BE (Belgian AZERTY), fr_CH, de_CH (Swiss), DE (QWERTZ), ES, IT, PT, BEPO. Every key is read by its position, with AltGr (the right Alt key, or Ctrl+Alt) and the dead accents (^ then e: ê). Settings > Keyboard does the same; the layout is kept for the next start. loadctl is the same.", NULL, "keyboardctl FR\nkeyboardctl UK", NULL },
+      "Shows or sets it: EN (Default) - the US keyboard -, UK, US-Intl (US international: dead accents), FR (AZERTY), BE (Belgian AZERTY), fr_CH, de_CH (Swiss), DE (QWERTZ), ES, IT, PT, BEPO, fr_CA (Canadian French), LatAm, BR (ABNT2), NL, SE, FI, NO, DK, PL (programmer), CZ, HU, HR (Croatian, Slovene), RO, TR (Q), GR (Greek), RU (Russian), UA (Ukrainian), Dvorak, Colemak. On the desktop Win+Space switches to EN and back (for Russian or Greek, to type commands). Every key is read by its position, with AltGr (the right Alt key, or Ctrl+Alt) and the dead accents (^ then e: ê). Settings > Keyboard does the same; the layout is kept for the next start. loadctl is the same.", NULL, "keyboardctl FR\nkeyboardctl UK", NULL },
     { "loadctl", "hardware", "loadctl [layout]", "the same as keyboardctl", NULL, NULL, NULL, "keyboardctl" },
     { "sensors", "hardware", "sensors", "the processor's temperature (real hardware)", NULL, NULL, NULL, NULL },
     { "gamepad", "hardware", "gamepad", "game controllers: sticks, triggers, buttons", NULL, NULL, NULL, NULL },

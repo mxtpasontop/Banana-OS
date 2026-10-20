@@ -106,33 +106,44 @@ static int alloc_px(bgl3_ctx_t* c, int w, int h) {
     return 0;
 }
 
-static bgl3_ctx_t* create(bwin_t* win, int w, int h, int compat) {
+/* an OSMesa context: profile BGL3_CORE or BGL3_COMPAT; major 0 = no
+ * version asked (the compatibility profile: Mesa's highest) or, for the
+ * core profile, the highest from 4.6 down that Mesa makes */
+static OSMesaContext os_context(int profile, int major, int minor, OSMesaContext share) {
+    int at[16], n = 0;
+    at[n++] = OSMESA_FORMAT; at[n++] = OSMESA_BGRA;
+    at[n++] = OSMESA_DEPTH_BITS; at[n++] = 24;
+    at[n++] = OSMESA_STENCIL_BITS; at[n++] = 8;
+    at[n++] = OSMESA_PROFILE; at[n++] = profile == BGL3_COMPAT ? OSMESA_COMPAT_PROFILE : OSMESA_CORE_PROFILE;
+    if (major > 0) {
+        at[n++] = OSMESA_CONTEXT_MAJOR_VERSION; at[n++] = major;
+        at[n++] = OSMESA_CONTEXT_MINOR_VERSION; at[n++] = minor;
+        at[n] = 0;
+        return os_create(at, share);
+    }
+    at[n] = 0;
+    if (profile == BGL3_COMPAT) return os_create(at, share);
+    static const int V[][2] = { { 4, 6 }, { 4, 5 }, { 4, 4 }, { 4, 3 }, { 4, 2 }, { 4, 1 }, { 4, 0 }, { 3, 3 }, { 3, 2 } };
+    for (unsigned i = 0; i < sizeof(V) / sizeof(V[0]); i++) {
+        at[n] = OSMESA_CONTEXT_MAJOR_VERSION; at[n + 1] = V[i][0];
+        at[n + 2] = OSMESA_CONTEXT_MINOR_VERSION; at[n + 3] = V[i][1];
+        at[n + 4] = 0;
+        OSMesaContext c = os_create(at, share);
+        if (c) return c;
+    }
+    return NULL;
+}
+
+static bgl3_ctx_t* create_v(bwin_t* win, int w, int h, int profile, int major, int minor, bgl3_ctx_t* share) {
     g_err[0] = 0;
     if (load()) return NULL;
-    const int at[] = {
-        OSMESA_FORMAT, OSMESA_BGRA,
-        OSMESA_DEPTH_BITS, 24,
-        OSMESA_STENCIL_BITS, 8,
-        OSMESA_PROFILE, OSMESA_CORE_PROFILE,
-        OSMESA_CONTEXT_MAJOR_VERSION, 3,
-        OSMESA_CONTEXT_MINOR_VERSION, 3,
-        0,
-    };
-    /* the compatibility profile: no version asked - Mesa's highest, with
-     * the fixed-function pipeline (glBegin, display lists, the matrix stack) */
-    const int at_compat[] = {
-        OSMESA_FORMAT, OSMESA_BGRA,
-        OSMESA_DEPTH_BITS, 24,
-        OSMESA_STENCIL_BITS, 8,
-        OSMESA_PROFILE, OSMESA_COMPAT_PROFILE,
-        0,
-    };
     bgl3_ctx_t* c = calloc(1, sizeof(*c));
-    if (!c || alloc_px(c, w, h)) { free(c); snprintf(g_err, sizeof(g_err), "OpenGL 3.3: out of memory"); return NULL; }
+    if (!c || alloc_px(c, w, h)) { free(c); snprintf(g_err, sizeof(g_err), "OpenGL: out of memory"); return NULL; }
     c->win = win;
-    c->os = os_create(compat ? at_compat : at, NULL);
+    c->os = os_context(profile, major, minor, share ? share->os : NULL);
     if (!c->os) {
-        snprintf(g_err, sizeof(g_err), compat ? "OpenGL: Mesa could not make a compatibility context" : "OpenGL 3.3: Mesa could not make a 3.3 core context");
+        if (major > 0) snprintf(g_err, sizeof(g_err), "OpenGL: Mesa could not make a %d.%d %s context", major, minor, profile == BGL3_COMPAT ? "compatibility" : "core");
+        else snprintf(g_err, sizeof(g_err), "OpenGL: Mesa could not make a %s context", profile == BGL3_COMPAT ? "compatibility" : "core");
         free(c->px);
         free(c);
         return NULL;
@@ -143,6 +154,24 @@ static bgl3_ctx_t* create(bwin_t* win, int w, int h, int compat) {
         return NULL;
     }
     return c;
+}
+
+static bgl3_ctx_t* create(bwin_t* win, int w, int h, int compat) {
+    return compat ? create_v(win, w, h, BGL3_COMPAT, 0, 0, NULL) : create_v(win, w, h, BGL3_CORE, 3, 3, NULL);
+}
+
+bgl3_ctx_t* bgl3_create_version(bwin_t* win, int w, int h, int profile, int major, int minor, bgl3_ctx_t* share) {
+    if (win && win->id >= 0) { w = win->w; h = win->h; }
+    else win = NULL;
+    return create_v(win, w, h, profile, major, minor, share);
+}
+
+int bgl3_make_current_buffer(bgl3_ctx_t* c, unsigned int* px, int w, int h) {
+    if (!c || !px) return bgl3_make_current(c);
+    if (!os_make_current(c->os, px, GL_UNSIGNED_BYTE, w, h)) return -1;
+    os_pixel_store(OSMESA_Y_UP, 0);
+    g_cur = c;
+    return 0;
 }
 
 bgl3_ctx_t* bgl3_create(bwin_t* win) {

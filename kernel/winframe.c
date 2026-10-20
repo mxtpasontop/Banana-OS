@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "winframe.h"
+#include "theme.h"
 #include "fb.h"
 #include "timer.h"
 #include "gfx.h"
@@ -223,10 +224,10 @@ static void outline(int x, int y, int w, int h, uint32_t c) {
 }
 
 void win_draw_button_row(int right, int y, int h, int has_max, int maxed) {
-    const uint32_t gb = 0x00303740u, ghi = 0x00535D6Eu, glo = 0x0015191Fu, fg = 0x00FFFFFFu;
+    const uint32_t gb = TC(0x303740), ghi = TC(0x535D6E), glo = TC(0x15191F), fg = TC(0xFFFFFF);
     int cx = right - 28;
-    btn_box(cx, y, 20, h, 0x006D2F2Fu, 0x00A14747u, 0x00301717u);
-    gfx_draw_text(cx + 6, y + (h - 8) / 2, "x", fg, 0x006D2F2Fu);
+    btn_box(cx, y, 20, h, TC(0x6D2F2F), TC(0xA14747), TC(0x301717));
+    gfx_draw_text(cx + 6, y + (h - 8) / 2, "x", fg, TC(0x6D2F2F));
     int mx = cx - 24;
     if (has_max) {
         btn_box(mx, y, 20, h, gb, ghi, glo);

@@ -22,7 +22,7 @@ typedef struct {
 } entry_t;
 
 static entry_t g_e[DLM_MAX];
-static int g_next_id = 1, g_loaded, g_workers;
+static int g_next_id = 1, g_loaded, g_workers, g_session_base = 1;
 static volatile uint32_t g_gen;
 static dlm_cookies_fn g_cookies;
 
@@ -92,11 +92,11 @@ static void load_list(void) {
     g_loaded = 1;
     int idx = fs_find_file(LIST_PATH);
     fs_file_t* f = idx >= 0 ? fs_file_info(idx) : NULL;
-    if (!f || !f->size || f->size > (1u << 20)) return;
+    if (!f || !f->size || f->size > (1u << 20)) { g_session_base = g_next_id; return; }
     char* b = (char*)kmalloc(f->size + 1);
-    if (!b) return;
+    if (!b) { g_session_base = g_next_id; return; }
     int n = fs_read(idx, 0, b, f->size);
-    if (n < 0) { kfree(b); return; }
+    if (n < 0) { kfree(b); g_session_base = g_next_id; return; }
     b[n] = 0;
     /* (oldest first in the file: each new entry is newer) */
     for (char* l = b; *l; ) {
@@ -129,6 +129,12 @@ static void load_list(void) {
         l = e + 1;
     }
     kfree(b);
+    g_session_base = g_next_id;               /* (what comes after: this start's) */
+}
+
+int dlm_session_base(void) {
+    load_list();
+    return g_session_base;
 }
 
 /* ── a download, in a worker task ──────────────────────────────────── */

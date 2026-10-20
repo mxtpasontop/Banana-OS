@@ -18,7 +18,7 @@
  */
 
 #define BANANA_API_MAGIC   0x414E4142u     /* "BANA" */
-#define BANANA_API_VERSION 22u
+#define BANANA_API_VERSION 23u
 
 /* open() flags */
 #define BANANA_O_READ    0x01
@@ -490,6 +490,8 @@ typedef struct banana_api {
     int   (*utc_offset)(unsigned int utc);
     /* v22: optional GPU contexts and owned resources (banana_gpu.h). */
     int (*gpu_call)(unsigned op, const void* request, unsigned request_size, void* data, unsigned size);
+    /* v23: the desktop's language - "en", "fr", "de" (Settings > Language) - into out: 0, or -1 */
+    int (*language)(char* out, int cap);
 } banana_api_t;
 
 #define BANANA_SIG_DEFAULT 0

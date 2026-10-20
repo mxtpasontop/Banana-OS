@@ -14,7 +14,10 @@ sdk/
 ├── lib/            crt0.c, libc.c, stdio.c, banana.c (compiled into every app)
 ├── banana.mk       build rules: include it from your app's Makefile
 ├── tools/bpkg      the packager (pack, list, extract, check)
-└── examples/       hello, guess (console), paint, clock, mandel (desktop), tones (sound)
+├── tools/bananatheme  themes for the desktop: new, check, preview (PNG), pack
+├── themes/         the theme format (README.md) and examples
+└── examples/       hello, guess (console), paint, clock, mandel (desktop), tones (sound),
+                    gl3test, glinfo, gles2 (OpenGL, EGL, OpenGL ES through Mesa)
 ```
 
 ## Requirements

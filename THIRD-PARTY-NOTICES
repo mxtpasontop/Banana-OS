@@ -188,3 +188,10 @@ LLVM 18.1.8 (ports/llvm: the optional X86 JIT runtime behind Mesa's
 LLVMpipe renderer; not in the default image)
 Copyright (c) the LLVM Project contributors
 License: Apache License 2.0 with LLVM Exceptions - https://llvm.org/LICENSE.txt
+
+Noto Emoji (fonts/NotoEmoji-Regular.ttf: the emoji drawn where the other
+fonts lack a character)
+Copyright 2013 Google LLC
+License: SIL Open Font License, Version 1.1 - the full text is in
+fonts/LICENSE-NotoEmoji. Source: https://github.com/google/fonts/tree/main/ofl/notoemoji
+(NotoEmoji[wght].ttf, sha256 de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551).

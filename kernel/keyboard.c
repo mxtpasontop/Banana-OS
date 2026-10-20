@@ -93,6 +93,16 @@ static uint32_t caps_flip(uint32_t v) {
     if ((v >= 'a' && v <= 'z') || (v >= 'A' && v <= 'Z')) return v ^ 0x20;
     if (v >= 0xE0 && v <= 0xFE && v != 0xF7) return v - 0x20;
     if (v >= 0xC0 && v <= 0xDE && v != 0xD7) return v + 0x20;
+    if (v >= 0x430 && v <= 0x44F) return v - 0x20;           /* Cyrillic */
+    if (v >= 0x410 && v <= 0x42F) return v + 0x20;
+    if (v >= 0x450 && v <= 0x45F) return v - 0x50;
+    if (v >= 0x400 && v <= 0x40F) return v + 0x50;
+    if (v >= 0x3B1 && v <= 0x3C9 && v != 0x3C2) return v - 0x20;   /* Greek */
+    if (v >= 0x391 && v <= 0x3A9) return v + 0x20;
+    /* Latin Extended-A: pairs of capital and small, the capital even ... */
+    if ((v >= 0x100 && v <= 0x137 && v != 0x130 && v != 0x131) || (v >= 0x14A && v <= 0x177)) return v ^ 1;
+    /* ... or odd (Ĺ ĺ ... Ň ň, Ź ź Ż ż Ž ž) */
+    if ((v >= 0x139 && v <= 0x148) || (v >= 0x179 && v <= 0x17E)) return (v & 1) ? v + 1 : v - 1;
     return v;
 }
 
@@ -369,6 +379,9 @@ static int layout_key(uint8_t sc, char* out) {
             return 1;
         }
         if (v < 128) { *out = (char)v; return 1; }
+        /* (a letter of another alphabet - Russian, Greek: the Latin one at its place) */
+        char us = sc < 128 ? sc_normal[sc] : 0;
+        if (us >= 'a' && us <= 'z') { *out = (char)(us & 0x1F); return 1; }
         return 0;
     }
 
@@ -697,6 +710,17 @@ const char* keyboard_layout_at(int i, const char** label) {
     return kb_layouts[i].name;
 }
 
+/* Win+Space: English (US) and back to the layout chosen (for typing
+ * commands and web addresses on a Russian or Greek keyboard): the layout
+ * now in use */
+static int g_layout_back = -1;
+const char* keyboard_toggle_layout(void) {
+    if (g_layout != 0) { g_layout_back = g_layout; g_layout = 0; }
+    else if (g_layout_back > 0) g_layout = g_layout_back;
+    g_dead = 0;
+    return kb_layouts[g_layout].label;
+}
+
 int keyboard_set_layout(const char* name) {
     if (!name || !*name) return -1;
     if (strieq(name, "EN") || strieq(name, "US") || strieq(name, "default")) name = kb_layouts[0].name;
@@ -704,6 +728,7 @@ int keyboard_set_layout(const char* name) {
         if (strieq(name, kb_layouts[i].name)) {
             g_dead = 0;
             g_layout = i;
+            g_layout_back = -1;
             return 0;
         }
     return -1;

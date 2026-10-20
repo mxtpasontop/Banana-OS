@@ -175,9 +175,36 @@ int net_interrupted(void) {
     return keyboard_try_getchar() == 3;
 }
 
+/* a card's cable: plugged in (drivers that cannot tell: yes) */
+static int link_of(netdev_t* d) { return d && d->present && (!d->link_up || d->link_up(d) != 0); }
+
+/* The card in use has no cable (for 3 s): another one
+ * that has a cable takes over, with DHCP - even when the saved
+ * configuration names the first (a laptop's empty Ethernet port must not
+ * keep a USB adapter with a cable off the network). A USB adapter first. */
+static void failover(void) {
+    static uint32_t since;
+    netdev_t* cur = g_if.dev;
+    if (cur && link_of(cur)) { since = 0; return; }
+    if (!since) { since = timer_ms() | 1; return; }
+    if ((uint32_t)(timer_ms() - since) < 3000) return;
+    netdev_t* best = NULL;
+    for (int i = 0; i < g_ndevs; i++) {
+        netdev_t* d = g_devs[i];
+        if (d == cur || !d->present || !d->link_up || !d->link_up(d)) continue;   /* (a known cable only) */
+        if (!best || (d->is_usb && !best->is_usb)) best = d;
+    }
+    since = 0;
+    if (!best) return;
+    klog("net: %s has no cable - %s takes over\n", cur ? cur->ifname : "(none)", best->ifname);
+    net_select_device(best);
+}
+
 static void netd_entry(void) {
+    uint32_t last_check = 0;
     for (;;) {
         net_poll();
+        if ((uint32_t)(timer_ms() - last_check) >= 1000) { last_check = timer_ms(); failover(); }
         /* NIC interrupts cut this short; otherwise it's the TCP/DHCP/ARP
          * timer resolution */
         task_sleep_ms(20);

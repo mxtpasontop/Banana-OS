@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+"""bananatheme - make Banana OS themes on Linux (or anywhere with Python 3).
+
+    bananatheme new NAME [--light] [-o FILE]       a theme to start from
+    bananatheme check FILE.theme                   is it right, is it readable
+    bananatheme preview FILE.theme [-o OUT.png]    what the desktop will look like
+    bananatheme pack FILE.theme [--wallpaper PIC] [-o OUT.btheme]
+                                                   one file with its picture
+
+Copy the .theme or .btheme to Banana OS (a USB stick, the Browser, curl...)
+and install it there: Settings > Themes > Install theme..., or
+`theme install FILE`. The format and how colours are worked out:
+sdk/themes/README.md. Only the Python standard library is needed.
+"""
+import argparse, os, struct, sys, zipfile, zlib
+
+SHADES = ["shadow", "base", "surface", "raised", "line", "text_dim", "text", "bright"]
+REQUIRED = ["base", "surface", "raised", "line", "text_dim", "text"]
+
+# Banana Dark - the palette the desktop is drawn with; a theme maps it
+DEFAULT = dict(shadow=0x000000, base=0x10141C, surface=0x1B212B, raised=0x303740, line=0x505E74,
+               text_dim=0x9AA6B6, text=0xE8EEF6, bright=0xFFFFFF, accent=0x3A78D8)
+LIGHT_START = dict(shadow=0xA8A8A8, base=0xFFFFFF, surface=0xF3F3F3, raised=0xE3E3E3, line=0xC4C4C4,
+                   text_dim=0x5C5C5C, text=0x1B1B1B, bright=0x000000, accent=0x005FB8)
+
+
+def lum(c):
+    return (((c >> 16) & 255) * 299 + ((c >> 8) & 255) * 587 + (c & 255) * 114) // 1000
+
+
+def mix(a, b, t):                       # t: 0..256 from a to b (as kernel/theme.c)
+    t = max(0, min(256, t))
+    ch = lambda s: ((((a >> s) & 255) * (256 - t) + ((b >> s) & 255) * t) >> 8) << s
+    return ch(16) | ch(8) | ch(0)
+
+
+class ThemeError(Exception):
+    pass
+
+
+def parse(text):
+    t, have, accent = {"name": "", "author": "", "wallpaper": ""}, set(), None
+    for n, raw in enumerate(text.splitlines(), 1):
+        s = raw.strip()
+        if not s or s[0] in "#;[":
+            continue
+        if "=" not in s:
+            raise ThemeError("line %d: no '=' (key=value)" % n)
+        k, v = (x.strip() for x in s.split("=", 1))
+        kl = k.lower()
+        if kl in ("name", "author", "wallpaper"):
+            t[kl] = v
+            continue
+        if kl in ("mode", "description"):
+            continue
+        if kl == "taskmgr":
+            if v.lower() not in ("banana", "classic", "windows10", "windows11", "win10", "win11", "windows", "10", "11"):
+                raise ThemeError("line %d: taskmgr= is banana, classic, windows10 or windows11" % n)
+            t["taskmgr"] = v.lower()
+            continue
+        if kl not in SHADES and kl != "accent":
+            raise ThemeError("line %d: unknown key '%s'" % (n, k))
+        h = v.lstrip("#")
+        if h.lower().startswith("0x"):
+            h = h[2:]
+        if len(h) < 6 or any(ch not in "0123456789abcdefABCDEF" for ch in h[:6]):
+            raise ThemeError("line %d: '%s' is not a colour (#RRGGBB)" % (n, v))
+        val = int(h[:6], 16)
+        if kl == "accent":
+            accent = val
+        else:
+            t[kl] = val
+            have.add(kl)
+    if not t["name"]:
+        raise ThemeError("no name= line")
+    for k in REQUIRED:
+        if k not in have:
+            raise ThemeError("%s= is missing" % k)
+    if accent is None:
+        raise ThemeError("accent= is missing")
+    t["accent"] = accent
+    light = lum(t["base"]) > lum(t["text"])
+    t.setdefault("shadow", mix(t["base"], 0, 90) if light else 0x000000)
+    t.setdefault("bright", 0x000000 if light else 0xFFFFFF)
+    t["light"] = light
+    return t
+
+
+# ── the mapping (kernel/theme.c map_color): a colour of the desktop's palette, themed ──
+def themed(t, c, light_design=False):
+    r, g, b = (c >> 16) & 255, (c >> 8) & 255, c & 255
+    mx, mn = max(r, g, b), min(r, g, b)
+    l = lum(c)
+    if mx - mn >= 70:
+        if b == mx and b - r >= 60:                     # a blue: the accent
+            al = lum(DEFAULT["accent"])
+            d = l - al
+            return mix(t["accent"], 0xFFFFFF, d * 256 // (256 - al)) if d >= 0 else mix(t["accent"], 0, -d * 256 // al)
+        return c
+    if light_design:
+        LL = [255, 248, 229, 211, 109, 30, 0]
+        LS = ["base", "surface", "raised", "line", "text_dim", "text", "bright"]
+        for i in range(6):
+            a, z = LL[i], LL[i + 1]
+            if l >= z or i == 5:
+                return t[LS[i]] if l >= a else mix(t[LS[i]], t[LS[i + 1]], (a - l) * 256 // (a - z))
+    anchors = [lum(DEFAULT[k]) for k in SHADES]
+    for i in range(len(SHADES) - 1):
+        a, z = anchors[i], anchors[i + 1]
+        if l <= z or i == len(SHADES) - 2:
+            return t[SHADES[i]] if l <= a else mix(t[SHADES[i]], t[SHADES[i + 1]], (l - a) * 256 // max(1, z - a))
+    return t["text"]
+
+
+def warnings(t):
+    out = []
+    for what, a, b, need in (("text and base", "text", "base", 120), ("text and surface", "text", "surface", 110),
+                             ("text_dim and surface", "text_dim", "surface", 60), ("raised and surface", "raised", "surface", 6)):
+        d = abs(lum(t[a]) - lum(t[b]))
+        if d < need:
+            out.append("%s are close (lightness %d apart, %d+ reads well)" % (what, d, need))
+    return out
+
+
+# ── PNG preview ──
+class Canvas:
+    def __init__(self, w, h, bg):
+        self.w, self.h = w, h
+        self.px = [bg] * (w * h)
+
+    def rect(self, x, y, w, h, c):
+        for yy in range(max(0, y), min(self.h, y + h)):
+            row = yy * self.w
+            for xx in range(max(0, x), min(self.w, x + w)):
+                self.px[row + xx] = c
+
+    def png(self, path):
+        raw = bytearray()
+        for y in range(self.h):
+            raw.append(0)
+            for c in self.px[y * self.w:(y + 1) * self.w]:
+                raw += bytes(((c >> 16) & 255, (c >> 8) & 255, c & 255))
+        def chunk(tag, data):
+            return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        with open(path, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", self.w, self.h, 8, 2, 0, 0, 0))
+                    + chunk(b"IDAT", zlib.compress(bytes(raw), 9)) + chunk(b"IEND", b""))
+
+
+def preview(t, out, w=640, h=400):
+    T = lambda c: themed(t, c)
+    L = lambda c: themed(t, c, True)
+    cv = Canvas(w, h, 0x1E4C8C)
+    for y in range(h):                                   # a stand-in wallpaper
+        cv.rect(0, y, w, 1, mix(0x0E2A55, 0x3A7BD5, y * 256 // h))
+    # a dark-design window: Settings-like
+    x, y, ww, wh = 24, 20, 340, 250
+    cv.rect(x, y, ww, wh, T(0x1D232C))
+    cv.rect(x + 3, y + 3, ww - 6, 18, T(0x384562))
+    cv.rect(x + 10, y + 9, 70, 5, T(0xFFFFFF))
+    cv.rect(x + ww - 22, y + 6, 16, 12, 0x6D2F2F)
+    cv.rect(x + 6, y + 26, 100, wh - 32, T(0x161B22))
+    for i in range(8):
+        sel = i == 1
+        if sel:
+            cv.rect(x + 8, y + 32 + i * 22, 96, 18, T(0x2C3E5C))
+            cv.rect(x + 8, y + 32 + i * 22, 3, 18, T(0x3A7BD5))
+        cv.rect(x + 18, y + 39 + i * 22, 50 + (i * 13) % 30, 4, T(0xFFFFFF) if sel else T(0xAAB6C6))
+    cv.rect(x + 118, y + 34, 90, 5, T(0xFFFFFF))
+    cv.rect(x + 118, y + 48, 180, 4, T(0xAAB6C6))
+    for i in range(3):
+        cv.rect(x + 118, y + 66 + i * 30, 200, 24, T(0x262B33))
+        cv.rect(x + 126, y + 76 + i * 30, 100, 4, T(0xE8EEF6))
+    cv.rect(x + 118, y + 170, 90, 22, T(0x303740))
+    cv.rect(x + 118, y + 170, 90, 1, T(0x535D6E))
+    cv.rect(x + 132, y + 179, 60, 4, T(0xE8EEF6))
+    cv.rect(x + 216, y + 170, 90, 22, T(0x3A78D8))
+    # a light-design window: Files-like
+    x, y, ww, wh = 300, 70, 320, 240
+    cv.rect(x, y, ww, wh, T(0x1D232C))
+    cv.rect(x + 3, y + 3, ww - 6, 18, T(0x384562))
+    cv.rect(x + 10, y + 9, 60, 5, T(0xFFFFFF))
+    cv.rect(x + 3, y + 22, ww - 6, 24, L(0xD6E3F3))
+    cv.rect(x + 40, y + 27, 200, 14, L(0xFFFFFF))
+    cv.rect(x + 3, y + 46, 90, wh - 49, L(0xF6F9FD))
+    cv.rect(x + 93, y + 46, ww - 96, wh - 49, L(0xFFFFFF))
+    for i in range(8):
+        if i == 2:
+            cv.rect(x + 95, y + 52 + i * 20, ww - 100, 18, L(0xCCE8FF))
+        cv.rect(x + 104, y + 58 + i * 20, 12, 8, 0xE8C060)
+        cv.rect(x + 122, y + 60 + i * 20, 60 + (i * 17) % 50, 4, L(0x1E1E1E))
+        cv.rect(x + 12, y + 56 + i * 20, 50, 4, L(0x1E1E1E) if i < 4 else L(0x6D6D6D))
+    # the taskbar
+    cv.rect(0, h - 28, w, 28, T(0x192026))
+    cv.rect(0, h - 28, w, 1, T(0x4F5A6E))
+    cv.rect(6, h - 24, 20, 20, 0x2A6FC0)
+    for i, on in enumerate((True, False)):
+        bx = 40 + i * 130
+        cv.rect(bx, h - 25, 124, 22, T(0x405478) if on else T(0x303740))
+        cv.rect(bx + 26, h - 16, 60, 4, T(0xE8EEF6))
+    cv.rect(w - 80, h - 22, 64, 4, T(0xE8EEF6))
+    cv.rect(w - 80, h - 12, 70, 4, T(0xB8C2D0))
+    cv.png(out)
+
+
+def theme_text(name, base, author):
+    lines = ["# A Banana OS theme - sdk/themes/README.md tells what each colour paints.",
+             "# Check it: bananatheme check FILE; see it: bananatheme preview FILE",
+             "name=%s" % name, "author=%s" % author, "# wallpaper=Azure Flow     (a preset, or a picture packed with it)"]
+    for k in SHADES:
+        lines.append("%s=#%06X" % (k, base[k]))
+    lines.append("accent=#%06X" % base["accent"])
+    return "\n".join(lines) + "\n"
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="bananatheme", description="Make Banana OS themes.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("new", help="write a theme to start from")
+    p.add_argument("name")
+    p.add_argument("--light", action="store_true", help="start from a light theme (else dark)")
+    p.add_argument("--author", default=os.environ.get("USER", "me"))
+    p.add_argument("-o", "--output")
+    p = sub.add_parser("check", help="check a .theme file")
+    p.add_argument("file")
+    p = sub.add_parser("preview", help="draw what the desktop will look like (PNG)")
+    p.add_argument("file")
+    p.add_argument("-o", "--output")
+    p = sub.add_parser("pack", help="a .btheme: the theme and its wallpaper in one file")
+    p.add_argument("file")
+    p.add_argument("--wallpaper", help="a picture (PNG, JPEG, BMP, WebP) to go with it")
+    p.add_argument("-o", "--output")
+    a = ap.parse_args()
+
+    if a.cmd == "new":
+        out = a.output or a.name.lower().replace(" ", "-") + ".theme"
+        with open(out, "w") as f:
+            f.write(theme_text(a.name, LIGHT_START if a.light else DEFAULT, a.author))
+        print("wrote %s - change its colours, then: bananatheme preview %s" % (out, out))
+        return 0
+
+    try:
+        with open(a.file, encoding="utf-8") as f:
+            t = parse(f.read())
+    except (OSError, ThemeError) as e:
+        print("%s: %s" % (a.file, e), file=sys.stderr)
+        return 1
+
+    if a.cmd == "check":
+        print("%s: good - %s, a %s theme" % (a.file, t["name"], "light" if t["light"] else "dark"))
+        for w in warnings(t):
+            print("  warning: " + w)
+        return 0
+    if a.cmd == "preview":
+        out = a.output or os.path.splitext(a.file)[0] + ".png"
+        preview(t, out)
+        print("wrote " + out)
+        return 0
+    if a.cmd == "pack":
+        out = a.output or os.path.splitext(a.file)[0] + ".btheme"
+        with open(a.file, encoding="utf-8") as f:
+            text = f.read()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            if a.wallpaper:
+                pic = os.path.basename(a.wallpaper)
+                z.write(a.wallpaper, pic)
+                lines = [l for l in text.splitlines() if not l.strip().lower().startswith("wallpaper")]
+                text = "\n".join(lines) + "\nwallpaper=%s\n" % pic
+            z.writestr(os.path.basename(a.file), text)
+        print("wrote %s - on Banana OS: theme install %s" % (out, os.path.basename(out)))
+        return 0
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

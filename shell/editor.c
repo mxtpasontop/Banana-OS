@@ -79,9 +79,14 @@ static void draw(editor_t* e) {
         int y = e->scroll + r;
         if (y < t->n) {
             tb_line_t* l = &t->lines[y];
-            int x = u8_byte_at(l->s, (int)l->len, e->hscroll);
-            for (int col = e->hscroll; x < (int)l->len && col < e->hscroll + w; col++) {
-                int nx = u8_next(l->s, (int)l->len, x);
+            int x = u8_byte_at_col(l->s, (int)l->len, e->hscroll);
+            int col = u8_width(l->s, x);
+            if (col < e->hscroll) { x = u8_next(l->s, (int)l->len, x); terminal_putchar(' '); col += 2; }   /* (half a wide character) */
+            while (x < (int)l->len) {
+                int nx = u8_next(l->s, (int)l->len, x), at = x;
+                int cw = nx - x > 1 ? u8_wcwidth(u8_decode(l->s, (int)l->len, &at)) : 1;
+                if (col + cw > e->hscroll + w) break;
+                col += cw;
                 int in = has_sel && (y > sy0 || (y == sy0 && x >= sx0)) && (y < sy1 || (y == sy1 && x < sx1));
                 if (in) terminal_setcolor(VGA_COLOR_BLACK, VGA_COLOR_LIGHT_CYAN);
                 if (nx - x > 1) {

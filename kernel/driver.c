@@ -109,7 +109,12 @@ static uint64_t d_pci_bar(const bdrv_pci_t* b, int bar, int* is_io) {
     if (is_io) *is_io = io;
     return r;
 }
-static void d_pci_enable(const bdrv_pci_t* b) { pci_dev_t d; to_pci(b, &d); pci_enable(&d); }
+static void d_pci_enable(const bdrv_pci_t* b) {
+    pci_dev_t d;
+    to_pci(b, &d);
+    pci_enable(&d);
+    if (g_loading >= 0) pci_claim(&d, g_mods[g_loading].name);     /* (Device Manager: the module, not driver.c) */
+}
 
 static uint32_t d_in(uint16_t port, int width) { return width == 1 ? inb(port) : width == 2 ? inw(port) : inl(port); }
 static void d_out(uint16_t port, int width, uint32_t v) {

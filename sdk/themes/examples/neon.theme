@@ -1,0 +1,13 @@
+# A very dark theme with a pink accent (sdk/themes/README.md)
+name=Neon
+author=Banana OS
+wallpaper=Cyber Mint
+base=#07070C
+surface=#101018
+raised=#1D1D2B
+line=#3A3A55
+text_dim=#9A9AB8
+text=#F0F0FF
+accent=#FF3EA5
+# Task Manager's look: banana, classic, windows10 or windows11
+taskmgr=windows11

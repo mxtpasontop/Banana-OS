@@ -34,8 +34,15 @@ static const uint8_t* bitmap_of(uint32_t cp) {
     return NULL;
 }
 
+/* a wide character (an emoji): as tall as its cells - an emoji's ink is
+ * about one em, square, so it fills the two cells' width too - its
+ * baseline where that ink sits centred in them */
+static int wide_px(int h) { return h < 6 ? 6 : h + h / 8; }
+static int wide_base(int y, int h, int px) { return y + h / 2 + px * 3 / 8; }
+
 /* a character the 8x8 font has not, drawn with DejaVu Sans Mono into the
- * w x h cell at (x, y) (its background already filled): 0 if there is no
+ * w x h cell at (x, y) (its background already filled; for a wide
+ * character - an emoji, CJK - w spans both its cells): 0 if there is no
  * such font, or it has nothing to draw */
 static int ttf_cell(int x, int y, int w, int h, uint32_t cp, uint32_t fg) {
     if (!font_available(FONT_MONO) || cp < 0x20 || cp == 0xFFFF) return 0;
@@ -44,10 +51,17 @@ static int ttf_cell(int x, int y, int w, int h, uint32_t cp, uint32_t fg) {
     if (!t) return 0;
     char u[4];
     uint32_t n = (uint32_t)u8_encode(cp, u);
-    int px = h * 13 / 8, a, d;
-    font_metrics(FONT_MONO, px, &a, &d, NULL);
+    int px = h * 13 / 8, a, d, wide = gfx_char_cols(cp) == 2;
+    if (wide) px = wide_px(h);
     int adv = font_text_width(FONT_MONO, px, u, n);
-    font_draw(t, stride, x, y, x + w, y + h, FONT_MONO, px, x + (w - adv) / 2, y + (h - (a + d)) / 2 + a, u, n, fg, 0);
+    if (adv > w + 1) {                            /* still wider than its cells: smaller, to fit */
+        px = px * w / adv;
+        if (px < 6) px = 6;
+        adv = font_text_width(FONT_MONO, px, u, n);
+    }
+    font_metrics(FONT_MONO, px, &a, &d, NULL);
+    int base = wide ? wide_base(y, h, px) : y + (h - (a + d)) / 2 + a;
+    font_draw(t, stride, x, y, x + w, y + h, FONT_MONO, px, x + (w - adv) / 2, base, u, n, fg, 0);
     return 1;
 }
 
@@ -64,8 +78,9 @@ void gfx_draw_char_cp(int x, int y, uint32_t cp, uint32_t fg, uint32_t bg) {
     if (cp == ' ' || cp == 0 || cp == 0xA0) { fb_fill_rect(x, y, 8, 8, bg); return; }
     const uint8_t* glyph = bitmap_of(cp);
     if (!glyph) {                               /* (beyond Latin-1: the TrueType font, else '?') */
-        fb_fill_rect(x, y, 8, 8, bg);
-        if (ttf_cell(x, y, 8, 8, cp, fg)) return;
+        int cw = 8 * gfx_char_cols(cp);         /* (a wide character: two cells, full size) */
+        fb_fill_rect(x, y, cw, 8, bg);
+        if (ttf_cell(x, y, cw, 8, cp, fg)) return;
         glyph = font8x8_basic['?'];
     }
 
@@ -92,8 +107,9 @@ void gfx_draw_char_scaled_cp(int x, int y, int scale, uint32_t cp, uint32_t fg, 
     if (cp >= 0x80 && cp < 0xA0) cp = '?';
     const uint8_t* glyph = bitmap_of(cp);
     if (!glyph) {
-        fb_fill_rect(x, y, 8 * scale, 8 * scale, bg);
-        if (ttf_cell(x, y, 8 * scale, 8 * scale, cp, fg)) return;
+        int cw = 8 * scale * gfx_char_cols(cp);
+        fb_fill_rect(x, y, cw, 8 * scale, bg);
+        if (ttf_cell(x, y, cw, 8 * scale, cp, fg)) return;
         glyph = font8x8_basic['?'];
     }
 
@@ -133,16 +149,17 @@ static void smooth_text(int x, int y, int scale, const char* s, uint32_t fg, uin
         const char* line_end = s;
         while (line_end < e && *line_end != '\n') line_end++;
         int n = 0;
-        for (const char* q = start; q < line_end; ) { utf8_next(&q, line_end); n++; }
+        for (const char* q = start; q < line_end; ) n += gfx_char_cols(utf8_next(&q, line_end));
         fb_fill_rect(cx, y, n * cell, cell, bg);
         while (s < line_end) {
             const char* g = s;
             uint32_t cp = utf8_next(&s, line_end);
-            if (cp != ' ') {
+            int cells = gfx_char_cols(cp);      /* (an emoji or CJK character: two) */
+            if (cp != ' ' && cells) {
                 int adv = font_text_width(FONT_UI, px, g, (uint32_t)(s - g));
-                font_draw(t, stride, 0, 0, tw, th, FONT_UI, px, cx + (cell - adv) / 2, base, g, (uint32_t)(s - g), fg, 0);
+                font_draw(t, stride, 0, 0, tw, th, FONT_UI, px, cx + (cell * cells - adv) / 2, base, g, (uint32_t)(s - g), fg, 0);
             }
-            cx += cell;
+            cx += cell * cells;
         }
         if (s < e && *s == '\n') { s++; cx = x; y += cell; base += cell; }
     }
@@ -168,10 +185,13 @@ int  gfx_label_px(void) { return TSIZE[g_tsize].label; }
 
 void gfx_draw_cell_char(int x, int y, char c, uint32_t fg, uint32_t bg) { gfx_draw_cell_cp(x, y, (uint8_t)c, fg, bg); }
 
+int gfx_char_cols(uint32_t cp) { return u8_wcwidth(cp); }
+
 void gfx_draw_cell_cp(int x, int y, uint32_t cp, uint32_t fg, uint32_t bg) {
     if (!g_ok) return;
     if (g_tsize == 0) { gfx_draw_char_cp(x, y, cp, fg, bg); return; }     /* the classic 8x8 cells */
     int cw = gfx_cell_w(), ch = gfx_cell_h();
+    if (gfx_char_cols(cp) == 2) cw *= 2;       /* a wide character fills two cells */
     fb_fill_rect(x, y, cw, ch, bg);
     if (cp == ' ' || cp == 0 || cp == 0xA0) return;
     if (cp >= 0x80 && cp < 0xA0) cp = '?';
@@ -181,10 +201,16 @@ void gfx_draw_cell_cp(int x, int y, uint32_t cp, uint32_t fg, uint32_t bg) {
         if (!t) return;
         char u[4];
         uint32_t n = (uint32_t)u8_encode(cp, u);
-        int px = TSIZE[g_tsize].px, a, d;
-        font_metrics(FONT_UI, px, &a, &d, NULL);
+        int px = TSIZE[g_tsize].px, a, d, wide = gfx_char_cols(cp) == 2;
+        if (wide) px = wide_px(ch);
         int adv = font_text_width(FONT_UI, px, u, n);
-        font_draw(t, stride, x, y, x + cw + 2, y + ch, FONT_UI, px, x + (cw - adv) / 2, y + (ch - (a + d)) / 2 + a, u, n, fg, 0);
+        if (adv > cw + 2) {                       /* still wider than its cells: smaller, to fit */
+            px = px * (cw + 2) / adv;
+            if (px < 6) px = 6;
+            adv = font_text_width(FONT_UI, px, u, n);
+        }
+        font_metrics(FONT_UI, px, &a, &d, NULL);
+        font_draw(t, stride, x, y, x + cw + 2, y + ch, FONT_UI, px, x + (cw - adv) / 2, wide ? wide_base(y, ch, px) : y + (ch - (a + d)) / 2 + a, u, n, fg, 0);
         return;
     }
     const uint8_t* glyph = bitmap_of(cp);
@@ -205,8 +231,11 @@ void gfx_draw_text(int x, int y, const char* s, uint32_t fg, uint32_t bg) {
     int cx = x, len = (int)strlen(s);
     for (int i = 0; i < len; ) {
         if (s[i] == '\n') { cx = x; y += 8; i++; continue; }
-        gfx_draw_char_cp(cx, y, u8_decode(s, len, &i), fg, bg);      /* (a whole UTF-8 character a cell) */
-        cx += 8;
+        uint32_t cp = u8_decode(s, len, &i);
+        int cells = gfx_char_cols(cp);
+        if (!cells) continue;
+        gfx_draw_char_cp(cx, y, cp, fg, bg);      /* (a whole UTF-8 character a cell, a wide one two) */
+        cx += 8 * cells;
     }
 }
 
@@ -218,8 +247,11 @@ void gfx_draw_text_scaled(int x, int y, int scale, const char* s, uint32_t fg, u
     int step = 8 * scale;
     for (int i = 0; i < len; ) {
         if (s[i] == '\n') { cx = x; y += step; i++; continue; }
-        gfx_draw_char_scaled_cp(cx, y, scale, u8_decode(s, len, &i), fg, bg);
-        cx += step;
+        uint32_t cp = u8_decode(s, len, &i);
+        int cells = gfx_char_cols(cp);
+        if (!cells) continue;
+        gfx_draw_char_scaled_cp(cx, y, scale, cp, fg, bg);
+        cx += step * cells;
     }
 }
 

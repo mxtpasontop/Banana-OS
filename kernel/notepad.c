@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "notepad.h"
+#include "i18n.h"
+#include "theme.h"
 #include "keyboard.h"
 #include "utf8.h"
 #include "gfx.h"
@@ -29,14 +31,14 @@
 #define SB       12
 #define STATUS_H 16
 
-#define C_PANEL  0x001D232Cu
-#define C_TITLE  0x00384562u
-#define C_TEXT   0x00E8EEF6u
-#define C_DIM    0x00AAB6C6u
+#define C_PANEL  TC(0x1D232C)
+#define C_TITLE  TC(0x384562)
+#define C_TEXT   TC(0xE8EEF6)
+#define C_DIM    TC(0xAAB6C6)
 #define C_PAGE   0x00FCFCF8u
 #define C_INK    0x00181818u
 #define C_SELBG  0x00A8C8F0u
-#define C_ERR    0x00F08070u
+#define C_ERR    TC(0xF08070)
 
 enum { P_NONE = 0, P_OPEN, P_SAVEAS, P_FIND, P_CLOSE };
 
@@ -236,7 +238,7 @@ static void open_dialog(void) {
     start_dir(dir, sizeof(dir));
     g_after_save = 0;
     g_fc = 1;
-    fc_open("Open", dir, NULL, np_open_done);
+    fc_open(_("Open"), dir, NULL, np_open_done);
     g_gen++;
 }
 
@@ -356,23 +358,23 @@ static void close_choose(int k) {
 static void draw_close_box(void) {
     int bx, by, bw;
     close_box(&bx, &by, &bw);
-    gfx_fill_rect(bx + 4, by + 4, bw, CB_H, 0x00080A0Eu);
-    gfx_fill_rect(bx, by, bw, CB_H, 0x00262C36u);
-    gfx_fill_rect(bx, by, bw, 20, 0x00304868u);
-    gfx_draw_text(bx + 8, by + 6, "Notepad", 0x00FFFFFFu, 0x00304868u);
+    gfx_fill_rect(bx + 4, by + 4, bw, CB_H, TC(0x080A0E));
+    gfx_fill_rect(bx, by, bw, CB_H, TC(0x262C36));
+    gfx_fill_rect(bx, by, bw, 20, TC(0x304868));
+    gfx_draw_text(bx + 8, by + 6, _("Notepad"), TC(0xFFFFFF), TC(0x304868));
     char line[96];
     const char* name = g_path[0] && strrchr(g_path, '/') ? strrchr(g_path, '/') + 1 : "Untitled";
     ksnprintf(line, sizeof(line), "Do you want to save changes to %s?", name);
     int ml = (bw - 24) / 8;
     if (ml > 0 && ml < (int)sizeof(line) && (int)strlen(line) > ml) { line[ml - 1] = '?'; line[ml] = 0; }
-    gfx_draw_text(bx + 12, by + 36, line, 0x00E8EEF6u, 0x00262C36u);
+    gfx_draw_text(bx + 12, by + 36, line, TC(0xE8EEF6), TC(0x262C36));
     static const char* const B[3] = { "Cancel", "Don't Save", "Save" };
     for (int i = 0; i < 3; i++) {
         int x = bx + bw - 12 - (i + 1) * 100 + 8, y = by + CB_H - 32;
-        uint32_t base = i == 2 ? 0x003A7BD5u : 0x00303740u;
+        uint32_t base = i == 2 ? TC(0x3A7BD5) : TC(0x303740);
         gfx_fill_rect(x, y, 92, 22, base);
-        gfx_fill_rect(x, y, 92, 1, 0x00535D6Eu);
-        gfx_draw_text(x + (92 - (int)strlen(B[i]) * 8) / 2, y + 7, B[i], 0x00FFFFFFu, base);
+        gfx_fill_rect(x, y, 92, 1, TC(0x535D6E));
+        gfx_draw_text(x + (92 - (int)strlen(B[i]) * 8) / 2, y + 7, B[i], TC(0xFFFFFF), base);
     }
 }
 
@@ -692,20 +694,20 @@ void notepad_draw(const fb_info_t* fi) {
     if (!g_open) return;
     int x = g_win.x, y = g_win.y, w = g_win.w, h = g_win.h;
     int focused = gui_notepad_focused();
-    bevel(x, y, w, h, C_PANEL, 0x00505D72u, 0x0010141Cu);
-    uint32_t tbg = focused ? C_TITLE : 0x002A3240u;
-    bevel(x + 3, y + 3, w - 6, TITLE_H - 1, tbg, 0x00647692u, 0x00111923u);
+    bevel(x, y, w, h, C_PANEL, TC(0x505D72), TC(0x10141C));
+    uint32_t tbg = focused ? C_TITLE : TC(0x2A3240);
+    bevel(x + 3, y + 3, w - 6, TITLE_H - 1, tbg, TC(0x647692), TC(0x111923));
     char title[128];
     const char* name = g_path[0] ? strrchr(g_path, '/') + 1 : "Untitled";
     ksnprintf(title, sizeof(title), "%s%s - Notepad", g_tb.dirty ? "*" : "", name);
-    draw_clip(x + 10, y + 7, title, (w - 50) / 8, 0x00FFFFFFu, tbg);
+    draw_clip(x + 10, y + 7, title, (w - 50) / 8, TC(0xFFFFFF), tbg);
     win_draw_buttons(&g_win, 4, 12);
 
     for (int i = 0; i < TOOL_COUNT; i++) {
         if (TOOLS[i].x + TOOLS[i].w > w - 6) break;
-        bevel(x + TOOLS[i].x, y + TOOL_Y, TOOLS[i].w, TOOL_H - 2, 0x00303740u, 0x00535D6Eu, 0x0015191Fu);
-        gfx_draw_text(x + TOOLS[i].x + (TOOLS[i].w - (int)strlen(TOOLS[i].label) * 8) / 2, y + TOOL_Y + 5,
-                      TOOLS[i].label, C_TEXT, 0x00303740u);
+        bevel(x + TOOLS[i].x, y + TOOL_Y, TOOLS[i].w, TOOL_H - 2, TC(0x303740), TC(0x535D6E), TC(0x15191F));
+        gfx_draw_text(x + TOOLS[i].x + (TOOLS[i].w - (int)strlen(_(TOOLS[i].label)) * 8) / 2, y + TOOL_Y + 5,
+                      _(TOOLS[i].label), C_TEXT, TC(0x303740));
     }
 
     /* the page */
@@ -719,8 +721,10 @@ void notepad_draw(const fb_info_t* fi) {
         if (li >= g_tb.n) break;
         tb_line_t* l = &g_tb.lines[li];
         int ty = py + 2 + r * LINE_H;
-        int xi = u8_byte_at(l->s, (int)l->len, g_left);
-        for (int cidx = 0; cidx < cols; cidx++) {
+        int xi = u8_byte_at_col(l->s, (int)l->len, g_left);
+        int cidx = u8_width(l->s, xi) - g_left;
+        if (cidx < 0) { xi = u8_next(l->s, (int)l->len, xi); cidx = 1; }  /* (half a wide character scrolled off) */
+        while (cidx < cols) {
             int in = has_sel && (li > sy0 || (li == sy0 && xi >= sx0)) && (li < sy1 || (li == sy1 && xi < sx1));
             /* the selection covers the line break too */
             if (xi >= (int)l->len) {
@@ -729,46 +733,49 @@ void notepad_draw(const fb_info_t* fi) {
             }
             uint32_t cp = u8_decode(l->s, (int)l->len, &xi);    /* (xi moves to the next one) */
             uint32_t ch = (cp == '\t' || cp < 32) ? ' ' : cp;
+            int cw = gfx_char_cols(ch);                          /* (an emoji or CJK character: two cells) */
+            if (!cw) continue;
             uint32_t bg = in ? C_SELBG : C_PAGE;
-            if (in) gfx_fill_rect(px + 3 + cidx * CHAR_W, ty - 1, CHAR_W, LINE_H, bg);
+            if (in) gfx_fill_rect(px + 3 + cidx * CHAR_W, ty - 1, CHAR_W * cw, LINE_H, bg);
             if (ch != ' ') gfx_draw_cell_cp(px + 3 + cidx * CHAR_W, ty, ch, C_INK, bg);   /* (any character: kernel/gfx.c) */
+            cidx += cw;
         }
     }
     /* caret */
     if (focused && !g_prompt && (timer_ms() / 500) % 2 == 0) {
         int cr = g_tb.cy - g_top, cc = tb_col(&g_tb, g_tb.cy, g_tb.cx) - g_left;
         if (cr >= 0 && cr < rows && cc >= 0 && cc <= cols)
-            gfx_fill_rect(px + 3 + cc * CHAR_W - 1, py + 1 + cr * LINE_H, 2, LINE_H, 0x00202060u);
+            gfx_fill_rect(px + 3 + cc * CHAR_W - 1, py + 1 + cr * LINE_H, 2, LINE_H, TC(0x202060));
     }
 
     /* scrollbars */
-    gfx_fill_rect(px + pw, py, SB, ph, 0x002A3038u);
+    gfx_fill_rect(px + pw, py, SB, ph, TC(0x2A3038));
     int ty, th;
     sb_geom(&ty, &th);
-    bevel(px + pw + 1, py + ty, SB - 2, th, 0x00596678u, 0x007A889Cu, 0x00303844u);
-    gfx_fill_rect(px, py + ph, pw, SB, 0x002A3038u);
+    bevel(px + pw + 1, py + ty, SB - 2, th, TC(0x596678), TC(0x7A889C), TC(0x303844));
+    gfx_fill_rect(px, py + ph, pw, SB, TC(0x2A3038));
     int maxw = longest_line() + 1;
     if (maxw > cols) {
         int tw = pw * cols / maxw;
         if (tw < 16) tw = 16;
         int tx = (pw - tw) * g_left / (maxw - cols);
-        bevel(px + tx, py + ph + 1, tw, SB - 2, 0x00596678u, 0x007A889Cu, 0x00303844u);
+        bevel(px + tx, py + ph + 1, tw, SB - 2, TC(0x596678), TC(0x7A889C), TC(0x303844));
     }
 
     /* status line, or the prompt */
     int sy = y + h - STATUS_H - 2;
-    gfx_fill_rect(x + 3, sy, w - 6, STATUS_H, 0x00161B22u);
+    gfx_fill_rect(x + 3, sy, w - 6, STATUS_H, TC(0x161B22));
     char line[160];
     if (g_prompt == P_OPEN || g_prompt == P_SAVEAS || g_prompt == P_FIND) {
         const char* label = g_prompt == P_OPEN ? "Open: " : g_prompt == P_SAVEAS ? "Save as: " : "Find: ";
         ksnprintf(line, sizeof(line), "%s%s_   (Enter = OK, Esc = cancel)", label, g_input);
-        draw_clip(x + 8, sy + 4, line, (w - 24) / 8, 0x00FFE08Au, 0x00161B22u);
+        draw_clip(x + 8, sy + 4, line, (w - 24) / 8, TC(0xFFE08A), TC(0x161B22));
     } else if (g_status[0]) {
-        draw_clip(x + 8, sy + 4, g_status, (w - 24) / 8, g_status_err ? C_ERR : C_DIM, 0x00161B22u);
+        draw_clip(x + 8, sy + 4, g_status, (w - 24) / 8, g_status_err ? C_ERR : C_DIM, TC(0x161B22));
     } else {
         ksnprintf(line, sizeof(line), "Ln %d, Col %d   %d lines   %s", g_tb.cy + 1, tb_col(&g_tb, g_tb.cy, g_tb.cx) + 1, g_tb.n,
                   g_path[0] ? g_path : "(not saved yet)");
-        draw_clip(x + 8, sy + 4, line, (w - 24) / 8, C_DIM, 0x00161B22u);
+        draw_clip(x + 8, sy + 4, line, (w - 24) / 8, C_DIM, TC(0x161B22));
     }
     gfx_draw_grip(x + w, y + h);
     /* the dialogs, over the text */

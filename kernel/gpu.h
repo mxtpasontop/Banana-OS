@@ -121,5 +121,13 @@ int gpu_bga_s3_resume(void);
 int gpu_vmsvga_probe(const pci_dev_t* d);
 int gpu_virtio_probe(const pci_dev_t* d);
 int gpu_intel_probe(const pci_dev_t* d);
+/* AMD Radeon HD 5000-7000 (TeraScale 2) and RX 400/500 (Polaris): hardware
+ * cursor and vsync, EXPERIMENTAL - only with `gpu experimental on`
+ * (kernel/gpu_radeon.c) */
+int  gpu_radeon_try(void);               /* now: 0, or -1 (gpu_radeon_status says why) */
+const char* gpu_radeon_status(void);
+void gpu_radeon_boot(void);              /* settings_boot: when asked for */
+int  gpu_experimental(void);             /* the setting */
+void gpu_set_experimental(int on);
 
 #endif

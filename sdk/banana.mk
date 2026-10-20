@@ -18,6 +18,7 @@
 #                                         # folder of the app's own under /usr (removed with it)
 #     USE_GL      = 1                     # optional: OpenGL 1.x (#include <GL/bgl.h>)
 #     USE_GL3     = 1                     # optional: OpenGL 3.3 core (#include <GL/gl3.h>, 64-bit)
+#     USE_EGL     = 1                     # optional: EGL + OpenGL ES 1.1 / 2.0 / 3.x (<EGL/egl.h>, <GLES2/gl2.h>, 64-bit)
 #     USE_CL      = 1                     # optional: OpenCL (#include <CL/cl.h>)
 #     include /path/to/banana-sdk/banana.mk
 #
@@ -44,6 +45,7 @@ ICON        ?=
 UNPACK      ?=
 USE_GL      ?= 0
 USE_GL3     ?= 0
+USE_EGL     ?= 0
 USE_CL      ?= 0
 BUILD       ?= build
 # extra libraries (.a) linked after the objects, per CPU
@@ -76,6 +78,15 @@ endif
 # USE_GL3 = 1: OpenGL 3.3 (<GL/gl3.h>): Mesa, loaded from libOSMesa.so (ports/mesa)
 ifeq ($(USE_GL3),1)
 SRCS += $(BANANA_SDK)/lib/gl3.c
+endif
+
+# USE_EGL = 1: EGL 1.5 with OpenGL ES 1.1 / 2.0 / 3.x (<EGL/egl.h>, <GLES/gl.h>,
+# <GLES2/gl2.h>, <GLES3/gl3.h>) and desktop OpenGL: Mesa, as USE_GL3
+ifeq ($(USE_EGL),1)
+SRCS += $(BANANA_SDK)/lib/egl.c
+ifneq ($(USE_GL3),1)
+SRCS += $(BANANA_SDK)/lib/gl3.c
+endif
 endif
 
 # USE_CL = 1: OpenCL (<CL/cl.h>) - the runtime and TinyCC, which compiles the

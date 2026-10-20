@@ -355,3 +355,48 @@ void usb_list(void) {
         if (!any) terminal_writeln("  (no devices)");
     }
 }
+
+/* ── Device Manager ── */
+
+int usb_hc_count(void) { return g_hc_count; }
+const char* usb_hc_name(int h) { return h >= 0 && h < g_hc_count ? g_hcs[h]->name : ""; }
+const char* usb_hc_desc(int h) { return h >= 0 && h < g_hc_count ? g_hcs[h]->desc : ""; }
+
+static int info_iface(const uint8_t* p, void* ctx) {
+    usb_info_t* o = (usb_info_t*)ctx;
+    if (p[1] != 4 || p[0] < sizeof(usb_iface_desc_t)) return 0;
+    const usb_iface_desc_t* ifd = (const usb_iface_desc_t*)p;
+    if (!o->cls) { o->cls = ifd->bInterfaceClass; o->sub = ifd->bInterfaceSubClass; o->proto = ifd->bInterfaceProtocol; }
+    if (ifd->bInterfaceClass == 3) {
+        if (ifd->bInterfaceProtocol == 1) o->kbd = 1;
+        else if (ifd->bInterfaceProtocol == 2 || ifd->bInterfaceSubClass == 0) o->mouse = 1;
+    }
+    if (ifd->bInterfaceClass == 0xFF && ifd->bInterfaceSubClass == 0x5D) o->pad = 1;     /* (Xbox 360) */
+    return 0;
+}
+
+int usb_info(int i, usb_info_t* o) {
+    if (i < 0 || i >= USB_MAX_DEVICES) return 0;
+    usb_device_t* d = &g_devs[i];
+    if (!d->used || !d->present) return 0;
+    memset(o, 0, sizeof(*o));
+    o->bus = 0;
+    for (int h = 0; h < g_hc_count; h++) if (g_hcs[h] == d->hc) o->bus = h;
+    o->port = d->port;
+    o->parent = d->parent ? (int)(d->parent - g_devs) : -1;
+    o->vid = d->desc.idVendor;
+    o->pid = d->desc.idProduct;
+    o->bcd_usb = d->desc.bcdUSB;
+    o->cls = d->desc.bDeviceClass;
+    o->sub = d->desc.bDeviceSubClass;
+    o->proto = d->desc.bDeviceProtocol;
+    int cfg = d->active_config >= 0 ? d->active_config : 0;
+    usb_walk_config(d, cfg, info_iface, o);
+    if (d->driver && !strcmp(d->driver->name, "xpad")) o->pad = 1;
+    if (o->pad) o->mouse = 0;
+    o->speed = speed_name(d->speed);
+    o->driver = d->driver ? d->driver->name : NULL;
+    o->manufacturer = d->manufacturer;
+    o->product = d->product;
+    return 1;
+}

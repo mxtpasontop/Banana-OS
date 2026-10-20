@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "appwin.h"
+#include "theme.h"
 #include "keyboard.h"
 #include "winframe.h"
 #include "gfx.h"
@@ -13,8 +14,8 @@
 #define BORDER   3
 #define EVQ      64
 
-#define C_PANEL  0x001D232Cu
-#define C_TITLE  0x00384562u
+#define C_PANEL  TC(0x1D232C)
+#define C_TITLE  TC(0x384562)
 
 typedef struct {
     int       used;
@@ -214,8 +215,8 @@ static int open_win(int owner, const char* title, int w, int h, int app) {
         if (!px || !shown) { if (px) px_free(app, owner, px); kfree(shown); return -1; }
         memset(a, 0, sizeof(*a));
         a->app_mem = app;
-        memset32(px, 0x00FFFFFFu, (size_t)w * (size_t)h);
-        memset32(shown, 0x00FFFFFFu, (size_t)w * (size_t)h);
+        memset32(px, TC(0xFFFFFF), (size_t)w * (size_t)h);
+        memset32(shown, TC(0xFFFFFF), (size_t)w * (size_t)h);
         a->used = 1;
         a->owner = owner;
         a->px = px;
@@ -264,7 +265,7 @@ static void apply_resize(awin_t* w) {
     uint32_t* np = px_alloc(w->app_mem, w->owner, (size_t)w->pw * (size_t)w->ph * 4);
     uint32_t* ns = (uint32_t*)kmalloc((uint32_t)w->pw * (uint32_t)w->ph * 4);
     if (!np || !ns) { if (np) px_free(w->app_mem, w->owner, np); kfree(ns); return; }   /* no memory: stays as it is */
-    memset32(np, 0x00FFFFFFu, (size_t)w->pw * (size_t)w->ph);
+    memset32(np, TC(0xFFFFFF), (size_t)w->pw * (size_t)w->ph);
     int cw = w->cw < w->pw ? w->cw : w->pw, ch = w->ch < w->ph ? w->ch : w->ph;
     for (int y = 0; y < ch; y++) memcpy(np + (size_t)y * (size_t)w->pw, w->shown + (size_t)y * (size_t)w->cw, (size_t)cw * 4);
     memcpy(ns, np, (size_t)w->pw * (size_t)w->ph * 4);
@@ -443,25 +444,25 @@ void appwin_draw(const fb_info_t* fi) {
         if (w->min || w->hidden) continue;
         int active = g_focused && w == front();
         int W = outer_w(w), H = outer_h(w);
-        bevel(w->x, w->y, W, H, C_PANEL, 0x00505D72u, 0x0010141Cu);
-        uint32_t tbg = active ? C_TITLE : 0x002A3240u;
-        bevel(w->x + 3, w->y + 3, W - 6, TITLE_H - 2, tbg, 0x00647692u, 0x00111923u);
+        bevel(w->x, w->y, W, H, C_PANEL, TC(0x505D72), TC(0x10141C));
+        uint32_t tbg = active ? C_TITLE : TC(0x2A3240);
+        bevel(w->x + 3, w->y + 3, W - 6, TITLE_H - 2, tbg, TC(0x647692), TC(0x111923));
         char t[64];
         kstrlcpy(t, w->title, sizeof(t));
         int maxc = (W - 50) / 8;
         if (maxc < 1) maxc = 1;
         if ((int)strlen(t) > maxc) t[maxc] = 0;
-        gfx_draw_text(w->x + 10, w->y + 8, t, 0x00FFFFFFu, tbg);
+        gfx_draw_text(w->x + 10, w->y + 8, t, TC(0xFFFFFF), tbg);
         win_draw_button_row(w->x + W, w->y + 5, 14, w->resizable, w->maxed);
         blit(w, w->x + BORDER, w->y + TITLE_H + BORDER);
         if (w->resizable) gfx_draw_grip(w->x + W, w->y + H);
         if (w->resizing || w->pending) {
             /* the size it is about to get */
             int ow = w->pw + 2 * BORDER, oh = w->ph + TITLE_H + 2 * BORDER;
-            gfx_fill_rect(w->x, w->y, ow, 2, 0x00F4D35Eu);
-            gfx_fill_rect(w->x, w->y + oh - 2, ow, 2, 0x00F4D35Eu);
-            gfx_fill_rect(w->x, w->y, 2, oh, 0x00F4D35Eu);
-            gfx_fill_rect(w->x + ow - 2, w->y, 2, oh, 0x00F4D35Eu);
+            gfx_fill_rect(w->x, w->y, ow, 2, TC(0xF4D35E));
+            gfx_fill_rect(w->x, w->y + oh - 2, ow, 2, TC(0xF4D35E));
+            gfx_fill_rect(w->x, w->y, 2, oh, TC(0xF4D35E));
+            gfx_fill_rect(w->x + ow - 2, w->y, 2, oh, TC(0xF4D35E));
         }
     }
 }

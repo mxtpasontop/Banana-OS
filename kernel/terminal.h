@@ -55,6 +55,10 @@ terminal_mode_t terminal_get_mode(void);
 void terminal_fb_set_scale(int scale);
 int  terminal_fb_get_scale(void);
 
+/* A wide character (an emoji, CJK: u8_wcwidth 2) takes two grid cells:
+ * the character, then this in the cell after it (drawn by the first) */
+#define TERMINAL_WIDE_CONT 0x110000u
+
 /* Access framebuffer backing store (80x25) for GUI windows */
 void terminal_fb_get_buffer(const uint32_t** chars, const uint8_t** colors, int* width, int* height, int* stride);
 

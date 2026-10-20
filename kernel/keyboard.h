@@ -12,6 +12,8 @@ void keyboard_readline(char* buf, int maxlen);
 const char* keyboard_layout_name(void);
 const char* keyboard_layouts_help(void);
 int keyboard_set_layout(const char* name);
+/* Win+Space: English (US) and back to the layout chosen: the label of the one in use */
+const char* keyboard_toggle_layout(void);
 /* the layouts there are (kernel/kblayouts.c): the i-th one's name (as
  * keyboard_set_layout takes it) and *label ("French (AZERTY)"), or NULL */
 int keyboard_layout_count(void);
