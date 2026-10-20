@@ -112,5 +112,8 @@ int  terminal_vt_scroll_view(int vt, int delta);        /* + is back (up); 1 if 
  * none) and whether the cursor is shown (ESC [ ?25 l / h) */
 const char* terminal_vt_title(int vt);
 int  terminal_vt_cursor_shown(int vt);
+/* BEL (\a): how many vt has had, and whether its window is flashing for one (200 ms) */
+uint32_t terminal_vt_bells(int vt);
+int  terminal_vt_ringing(int vt);
 
 #endif

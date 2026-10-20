@@ -660,6 +660,12 @@ static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
     uint32_t title = active ? 0x003C4B66u : 0x00273140u;
     uint32_t title_hi = active ? 0x006B7892u : 0x004B5568u;
     uint32_t title_lo = active ? 0x00111824u : 0x0010151Fu;
+    if (terminal_vt_ringing(win->vt)) {         /* a BEL: the frame and title flash amber */
+        frame = 0x00B07A18u;
+        title = 0x00C8901Eu;
+        title_hi = 0x00F0C060u;
+        title_lo = 0x00604008u;
+    }
 
     /* frame + title (stronger Fluxbox-like bevel) */
     draw_bevel_box(w.x, w.y, w.w, w.h, frame, 0x004A5466u, 0x000E1116u);
@@ -1729,7 +1735,7 @@ static void draw_taskbar_fb(const fb_info_t* fi) {
 typedef struct {
     int menu_open, menu_sel;
     int term_open[TERM_WIN_MAX], term_x[TERM_WIN_MAX], term_y[TERM_WIN_MAX], term_order[TERM_WIN_MAX];
-    int term_w[TERM_WIN_MAX], term_h[TERM_WIN_MAX], term_sel[TERM_WIN_MAX], term_min[TERM_WIN_MAX];
+    int term_w[TERM_WIN_MAX], term_h[TERM_WIN_MAX], term_sel[TERM_WIN_MAX], term_min[TERM_WIN_MAX], term_bell[TERM_WIN_MAX];
     int front_app, app_order[APP_COUNT], app_min[APP_COUNT];
     uint32_t sec, term_gen, wp_gen, net_state, app_sig[APP_COUNT], ctx_sig, tb_gen;
     uint32_t desk_sig, wm_sig;
@@ -1751,6 +1757,7 @@ static void capture_view(gui_view_t* v, uint32_t sec) {
         v->term_w[i] = g_terms[i].w;
         v->term_h[i] = g_terms[i].h;
         v->term_min[i] = g_terms[i].minimized;
+        v->term_bell[i] = g_terms[i].open && terminal_vt_ringing(g_terms[i].vt);
         v->term_sel[i] = g_terms[i].sel ? g_terms[i].s_r0 * 7919 + g_terms[i].s_c0 * 31 + g_terms[i].s_r1 * 131 + g_terms[i].s_c1 + 1 : 0;
     }
     v->sec = sec;

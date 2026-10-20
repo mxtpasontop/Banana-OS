@@ -553,6 +553,7 @@ static uint8_t  es_cursor_off[VT_MAX];
 static char     es_osc[VT_MAX][80];
 static uint8_t  es_osc_n[VT_MAX];
 static char     vt_title[VT_MAX][64];
+static uint32_t vt_bell_ms[VT_MAX], vt_bells[VT_MAX];   /* the last BEL's time (0: none), how many */
 
 /* a vt given out again: none of the last owner's codes, colours or title */
 static void es_reset(int vt) {
@@ -561,6 +562,7 @@ static void es_reset(int vt) {
     es_fg[vt] = 7;
     es_bg[vt] = 0;
     vt_title[vt][0] = 0;
+    vt_bell_ms[vt] = vt_bells[vt] = 0;
     vt_u8_need[vt] = 0;
 }
 
@@ -837,6 +839,10 @@ static int es_feed(unsigned char c) {
     return 0;
 }
 
+uint32_t terminal_vt_bells(int vt) { return vt >= 0 && vt < VT_MAX ? vt_bells[vt] : 0; }
+int terminal_vt_ringing(int vt) {
+    return vt >= 0 && vt < VT_MAX && vt_bell_ms[vt] && (int32_t)(timer_ms() - vt_bell_ms[vt]) < 200;
+}
 const char* terminal_vt_title(int vt) { return vt >= 0 && vt < VT_MAX ? vt_title[vt] : ""; }
 int terminal_vt_cursor_shown(int vt) { return vt >= 0 && vt < VT_MAX ? !es_cursor_off[vt] : 1; }
 
@@ -848,6 +854,11 @@ void terminal_putchar(char c) {
     /* ...and an SSH session's vt to its client */
     if (g_serial_mirror && vt_active != 0) tty_mirror((int)vt_active, c);
     if (es_feed((unsigned char)c)) { maybe_flush_if_console(); return; }   /* (ESC [ ...: handled, not shown) */
+    if (c == 7) {                                       /* BEL: the window flashes (a visual bell) */
+        vt_bell_ms[vt_active] = timer_ms() | 1;
+        vt_bells[vt_active]++;
+        return;
+    }
     if (c == '\t') {                                    /* the cursor to the next tab stop (every 8 columns) */
         es_cursor((long)term_row, (long)((term_col / 8 + 1) * 8));
         maybe_flush_if_console();

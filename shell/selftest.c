@@ -456,6 +456,17 @@ static void t_terminal(void) {
     ok = !strcmp(terminal_vt_title(vt), "My title") && hidden && terminal_vt_cursor_shown(vt) && !esc_left;
     ksnprintf(note, sizeof(note), "title \"%s\", cursor hidden then shown%s", terminal_vt_title(vt), esc_left ? ", an ESC left on screen" : "");
     report("the title, hiding the cursor, nothing of the codes on screen", ok, note);
+    uint32_t bells = terminal_vt_bells(vt);
+    terminal_vt_set_active(vt);
+    terminal_write("\x1b[2J\x1b[Ha\ab");
+    terminal_vt_set_active(was);
+    int rang = terminal_vt_ringing(vt), drawn = TCELL(0, 0) == 'a' && TCELL(0, 1) == 'b';
+    uint32_t t0 = timer_ms();
+    while (timer_ms() - t0 < 250) task_yield();
+    ok = terminal_vt_bells(vt) == bells + 1 && rang && !terminal_vt_ringing(vt) && drawn;
+    ksnprintf(note, sizeof(note), "%u bell, flashing %d then %d, \"ab\" with nothing between: %d",
+              terminal_vt_bells(vt) - bells, rang, terminal_vt_ringing(vt), drawn);
+    report("BEL: a visual bell for 200 ms, nothing drawn", ok, note);
     #undef TCELL
     #undef TCOL
     terminal_vt_set_active(vt);
