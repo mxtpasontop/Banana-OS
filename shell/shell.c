@@ -1260,7 +1260,7 @@ static void cmd_history(void) {
 static const char* const known_cmds[] = {
     "help", "neofetch", "echo", "clear", "uname", "whoami", "hostname", "date", "timezone",
     "ls", "cd", "pwd", "mkdir", "rm", "touch", "cp", "mv", "edit", "cat", "run",
-    "uptime", "boottime", "termcolors", "top", "exit", "start", "stop", "startx", "stopx",
+    "uptime", "boottime", "termcolors", "termrender", "top", "exit", "start", "stop", "startx", "stopx",
     "keyboardctl", "loadctl", "usbctl", "proc_info", "ram_info", "gpu_info",
     "hw_info", "shutdown", "reboot", "halt", "sleep", "install", "sync", "drop_caches", "update", "installer", "disks", "history", "which", "type",
     "alias", "unalias", "export", "unset", "env", "chsh", "autologin",

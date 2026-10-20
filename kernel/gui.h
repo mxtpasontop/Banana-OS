@@ -48,6 +48,9 @@ int  gui_term_find_match(int vt, int* row, int* col);    /* (selftest) the match
 /* Ctrl+click on a web address in a terminal window opens it in the Browser;
  * (selftest) the address at (row, col) of vt's window: 1 and it in out */
 int  gui_term_link_at(int vt, int row, int col, char* out, int cap);
+/* (selftest) GPU rendering with renderer m (kernel/termrender.h): the changed
+ * cells after text was added, the same pixels as a whole redraw? 1, 0, -1 untried */
+int  gui_term_render_check(int vt, int m, const char* text, int* cells);
 
 /* Closes the GUI terminal window that owns `vt` (same as clicking its 'x'
  * button). Used by the shell's "exit" builtin. Returns 1 if a window was

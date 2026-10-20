@@ -27,6 +27,7 @@
 #include "login.h"
 #include "utf8.h"
 #include "termcolors.h"
+#include "termrender.h"
 #include "kheap.h"
 #include "appwin.h"
 #include "winframe.h"
@@ -924,6 +925,140 @@ static int open_new_terminal(void) {
     return g_term_order[TERM_WIN_MAX - 1];
 }
 
+/* ── drawing a window's cells: every one, or only those that changed ──
+ * Each cell's key says all that its picture depends on (the character,
+ * its colours, selected, a find match, the cursor on it); a window keeps
+ * the keys it drew last, so a frame can draw only the cells whose key
+ * changed (GPU rendering, kernel/termrender.h) instead of the whole
+ * desktop. */
+typedef struct {
+    uint64_t* key;                  /* rows x cols, as drawn last */
+    int n, valid;
+    int cx, cy, cols, rows, cw, ch; /* where and how big */
+    uint32_t scheme, deco;          /* the colour scheme, the frame's look (term_deco) */
+} term_cache_t;
+static term_cache_t g_tcache[TERM_WIN_MAX];
+static int g_dnd_on;                    /* (a drag and drop is going on: defined with it below) */
+
+static uint64_t cell_key(uint32_t c, uint8_t color, int sel, int hl, int cur) {
+    return (uint64_t)(c & 0x1FFFFFu) | (uint64_t)color << 21 | (uint64_t)sel << 29 | (uint64_t)hl << 30 | (uint64_t)cur << 32;
+}
+
+/* one cell's picture (cur: the cursor's shape + 1 if it is on it) */
+static void cell_draw(int x, int y, int CW, int CH, uint32_t c, uint8_t color, int sel, int hl, int cur) {
+    uint32_t fg = vga_color_rgb(color & 0x0F), bg = vga_color_rgb((color >> 4) & 0x0F);
+    if (cur == 1 + TERM_CURSOR_BLOCK) { gfx_draw_cell_cp(x, y, c ? c : ' ', bg, fg); return; }     /* (the character in reverse) */
+    if (hl) gfx_draw_cell_cp(x, y, c ? c : ' ', 0x00101010u, hl == 2 ? 0x00FF9632u : 0x00E8D24Au);
+    else if (sel) gfx_draw_cell_cp(x, y, c ? c : ' ', 0x00101010u, 0x00C8D8F0u);
+    else gfx_draw_cell_cp(x, y, c ? c : ' ', fg, bg);
+    if (cur == 1 + TERM_CURSOR_BAR) gfx_fill_rect(x, y, 2, CH, fg);
+    else if (cur) gfx_fill_rect(x, y + CH - 1, CW, 1, fg);
+}
+
+/* what the frame around the text shows: title, tabs, bell, find bar... */
+static uint32_t term_deco(const term_win_t* w) {
+    uint32_t h = 2166136261u;
+    #define MIX(v) (h = (h ^ (uint32_t)(v)) * 16777619u)
+    for (int t = 0; t < w->ntabs; t++) {
+        for (const char* p = terminal_vt_title(w->tab_vt[t]); *p; p++) MIX((unsigned char)*p);
+        MIX(terminal_vt_ringing(w->tab_vt[t]) + 7);
+    }
+    MIX(w->ntabs); MIX(w->tab); MIX(w->finding); MIX(w->maxed); MIX(w->zoom);
+    MIX(g_term_order[TERM_WIN_MAX - 1] >= 0 && &g_terms[g_term_order[TERM_WIN_MAX - 1]] == w);
+    #undef MIX
+    return h;
+}
+
+enum { TC_FULL, TC_FAST, TC_DRY };
+/* the window's cells at (cx, cy): all of them (TC_FULL - blank ones on the
+ * background already left), those that changed (TC_FAST), or only counted
+ * (TC_DRY); through VirGL when it is the renderer. How many changed, or -1
+ * if the window's cache cannot say (TC_FAST, TC_DRY: draw it whole). */
+static int term_cells(const fb_info_t* fi, const term_win_t* win, int mode, int cx, int cy, int max_cols, int max_rows) {
+    int wi = (int)(win - g_terms), CW = gfx_cell_w(), CH = gfx_cell_h();
+    term_cache_t* tc = &g_tcache[wi];
+    const uint32_t* chars;
+    const uint8_t* cols;
+    int tw, th, stride;
+    terminal_vt_get_buffer(win->vt, &chars, &cols, &tw, &th, &stride);
+    if (mode != TC_FULL && (!tc->valid || tc->cx != cx || tc->cy != cy || tc->cols != max_cols || tc->rows != max_rows ||
+                            tc->cw != CW || tc->ch != CH || tc->scheme != termcolors_generation() || tc->deco != term_deco(win)))
+        return -1;
+    if (mode == TC_FULL) {
+        int n = max_cols * max_rows;
+        if (n > tc->n) {
+            kfree(tc->key);
+            tc->key = (uint64_t*)kmalloc((size_t)n * sizeof(uint64_t));
+            tc->n = tc->key ? n : 0;
+        }
+        tc->valid = tc->key != NULL;
+        tc->cx = cx; tc->cy = cy; tc->cols = max_cols; tc->rows = max_rows; tc->cw = CW; tc->ch = CH;
+        tc->scheme = termcolors_generation();
+        tc->deco = term_deco(win);
+    }
+    size_t cr = 0, cc = 0;
+    terminal_vt_get_cursor(win->vt, &cr, &cc);
+    int base = term_view_base(win, max_rows, th);      /* (scrolled back: lines of the scrollback on top) */
+    int cur_shape = terminal_vt_cursor_shown(win->vt) ? 1 + terminal_vt_cursor_shape(win->vt) : 0;
+
+    int stride_px = 0, sw = 0, sh = 0;
+    uint32_t* bb = fb_target(&stride_px, &sw, &sh);
+    int gpu = mode != TC_DRY && termrender_gpu() && termrender_method() == TR_VIRGL && bb &&
+              trv_begin(CW, CH, (int)fi->width, (int)fi->height);
+    int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1, changed = 0;
+
+    uint32_t fq[64];
+    int fqn = win->finding ? find_query(win, fq, 64) : 0;
+    for (int y = 0; y < max_rows; y++) {
+        uint8_t hl[256];                                /* the find bar's matches: 1, the one shown: 2 */
+        if (fqn) {
+            memset(hl, 0, sizeof(hl));
+            for (int x = 0; x + fqn <= tw && x < 256; x++)
+                if (find_match_at(win, chars, cols, stride, tw, y + base, x, fq, fqn)) {
+                    int cur = win->f_found && win->f_row == y + base && win->f_col == x;
+                    for (int k = 0; k < fqn && x + k < 256; k++) hl[x + k] = cur ? 2 : 1;
+                }
+        }
+        for (int x = 0; x < max_cols; x++) {
+            uint8_t color;
+            uint32_t c;
+            term_cell(win, chars, cols, stride, y + base, x, &c, &color);
+            int h = fqn && x < 256 ? hl[x] : 0, sel = term_cell_selected(win, y + base, x);
+            int cur = cur_shape && y + base == (int)cr && x == (int)cc ? cur_shape : 0;
+            uint64_t key = cell_key(c, color, sel, h, cur);
+            uint64_t* kp = tc->valid && y * max_cols + x < tc->n ? &tc->key[y * max_cols + x] : NULL;
+            if (mode != TC_FULL && kp && *kp == key) continue;
+            changed++;
+            if (mode == TC_DRY) continue;
+            if (kp) *kp = key;
+            int px = cx + x * CW, py = cy + y * CH;
+            if (gpu) {                                  /* the card puts it there: its tile drawn once */
+                if (!trv_has(key)) {
+                    cell_draw(px, py, CW, CH, c, color, sel, h, cur);
+                    if (!trv_upload(key, bb + py * stride_px + px, stride_px)) goto gpu_failed;
+                }
+                if (!trv_cell(key, px, py)) goto gpu_failed;
+                if (px < x0) x0 = px;
+                if (py < y0) y0 = py;
+                if (px + CW > x1) x1 = px + CW;
+                if (py + CH > y1) y1 = py + CH;
+                continue;
+            }
+            /* (drawing it whole: the client area is the background already) */
+            if (mode == TC_FULL && !h && !sel && !cur && (c == ' ' || c == 0) && (color & 0xF0) == 0) continue;
+            cell_draw(px, py, CW, CH, c, color, sel, h, cur);
+        }
+    }
+    if (gpu && x1 >= 0) {
+        if (!trv_finish(x0, y0, x1 - x0, y1 - y0, bb, stride_px)) goto gpu_failed;
+        termrender_stats()->virgl++;
+    }
+    return changed;
+gpu_failed:                                             /* (VirGL stopped: in software from now on) */
+    tc->valid = 0;
+    return mode == TC_FULL ? term_cells(fi, win, TC_FULL, cx, cy, max_cols, max_rows) : -1;
+}
+
 static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
     if (!win || !TERM_SHOWN(win)) return;
     if (!fi) return;
@@ -982,49 +1117,8 @@ static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
     if (max_cols > tw) max_cols = tw;
     if (max_rows > th) max_rows = th;
 
-    /* Every vt is sized to the full screen's text grid (kernel/terminal.c),
-     * which is normally much taller than a terminal window's own client
-     * area - a window this size only ever showed rows 0..max_rows of that
-     * much bigger buffer, so once the cursor scrolled past the bottom of
-     * the window it just kept going in buffer rows nobody drew, and
-     * everything after looked "cut off" with no way to scroll to it.
-     * Follow the cursor instead: keep it pinned to the window's last
-     * visible row once the content grows past what the window can show,
-     * the same way a real terminal emulator's viewport tracks output. */
-    size_t cr = 0, cc = 0;
-    terminal_vt_get_cursor(win->vt, &cr, &cc);
-    int base = term_view_base(win, max_rows, th);      /* (scrolled back: lines of the scrollback on top) */
-
-    uint32_t fq[64];
-    int fqn = win->finding ? find_query(win, fq, 64) : 0;
-    for (int y = 0; y < max_rows; y++) {
-        uint8_t hl[256];                                /* the find bar's matches: 1, the one shown: 2 */
-        if (fqn) {
-            memset(hl, 0, sizeof(hl));
-            for (int x = 0; x + fqn <= tw && x < 256; x++)
-                if (find_match_at(win, chars, cols, stride, tw, y + base, x, fq, fqn)) {
-                    int cur = win->f_found && win->f_row == y + base && win->f_col == x;
-                    for (int k = 0; k < fqn && x + k < 256; k++) hl[x + k] = cur ? 2 : 1;
-                }
-        }
-        for (int x = 0; x < max_cols; x++) {
-            uint8_t color;
-            uint32_t c;
-            term_cell(win, chars, cols, stride, y + base, x, &c, &color);
-            if (fqn && x < 256 && hl[x]) {
-                gfx_draw_cell_cp(cx + x * CW, cy + y * CH, c ? c : ' ', 0x00101010u, hl[x] == 2 ? 0x00FF9632u : 0x00E8D24Au);
-                continue;
-            }
-            if (term_cell_selected(win, y + base, x)) {     /* selection: inverted */
-                gfx_draw_cell_cp(cx + x * CW, cy + y * CH, c ? c : ' ', 0x00101010u, 0x00C8D8F0u);
-                continue;
-            }
-            /* the client area is already black: skip blank black cells */
-            if ((c == ' ' || c == 0) && (color & 0xF0) == 0) continue;
-            gfx_draw_cell_cp(cx + x * CW, cy + y * CH, c,
-                               vga_color_rgb(color & 0x0F), vga_color_rgb((color >> 4) & 0x0F));
-        }
-    }
+    /* (the view follows the cursor: term_view_base) */
+    term_cells(fi, win, TC_FULL, cx, cy, max_cols, max_rows);
 
     gfx_draw_grip(w.x + w.w, w.y + w.h);
 
@@ -1041,22 +1135,6 @@ static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
             gfx_draw_text(cx + cw - sw - 6, by + 4, st, win->f_found || !win->fq[0] ? 0x0098A4B8u : 0x00FF7A7Au, 0x002A303Bu);
     }
 
-    {
-        int scr_row = (int)cr - base;                 /* (scrolled back: below the window) */
-        if (scr_row >= 0 && scr_row < max_rows && (int)cc < max_cols && terminal_vt_cursor_shown(win->vt)) {
-            int idx = (int)cr * stride + (int)cc;
-            uint8_t color = cols[idx];
-            uint32_t fg = vga_color_rgb(color & 0x0F);
-            int x = cx + (int)cc * CW, y = cy + scr_row * CH;
-            switch (terminal_vt_cursor_shape(win->vt)) {
-            case TERM_CURSOR_BLOCK:                     /* the character in reverse */
-                gfx_draw_cell_cp(x, y, chars[idx] ? chars[idx] : ' ', vga_color_rgb((color >> 4) & 0x0F), fg);
-                break;
-            case TERM_CURSOR_BAR: gfx_fill_rect(x, y, 2, CH, fg); break;
-            default: gfx_fill_rect(x, y + CH - 1, CW, 1, fg); break;
-            }
-        }
-    }
 }
 
 /* (in the window's own text size: Ctrl+= / Ctrl+-) */
@@ -2059,6 +2137,7 @@ typedef struct {
     int menu_open, menu_sel;
     int term_open[TERM_WIN_MAX], term_x[TERM_WIN_MAX], term_y[TERM_WIN_MAX], term_order[TERM_WIN_MAX];
     int term_w[TERM_WIN_MAX], term_h[TERM_WIN_MAX], term_sel[TERM_WIN_MAX], term_min[TERM_WIN_MAX], term_bell[TERM_WIN_MAX], term_tabs[TERM_WIN_MAX];
+    uint32_t tb_gen_render;           /* (the terminal renderer changed) */
     int front_app, app_order[APP_COUNT], app_min[APP_COUNT];
     uint32_t sec, term_gen, wp_gen, net_state, app_sig[APP_COUNT], ctx_sig, tb_gen;
     uint32_t desk_sig, wm_sig;
@@ -2088,6 +2167,7 @@ static void capture_view(gui_view_t* v, uint32_t sec) {
     }
     v->sec = sec;
     v->term_gen = terminal_generation() ^ termcolors_generation() * 0x9E3779B1u;
+    v->tb_gen_render = termrender_generation();
     v->wp_gen = wallpaper_generation();
     v->net_state = (net_if()->configured ? net_if()->ip : 1) ^ nettray_sig();
     v->front_app = g_front_app;
@@ -2665,6 +2745,46 @@ int gui_term_link_at(int vt, int row, int col, char* out, int cap) {
     return w && term_link_at(w, row, col, out, cap);
 }
 
+/* (selftest) GPU rendering with renderer m: vt's window drawn whole, text
+ * added, its changed cells drawn - the same pixels as drawing it all again?
+ * 1 yes, 0 no, -1 it could not be tried (*cells: cells drawn) */
+static void render_desktop(const fb_info_t* fi, int mx, int my);
+static int  term_fast_frame(const fb_info_t* fi, int mx, int my);
+int gui_term_render_check(int vt, int m, const char* text, int* cells) {
+    const fb_info_t* fi = fb_info();
+    term_win_t* w = term_of_vt(vt);
+    int stride, sw, sh;
+    uint32_t* bb = fb_target(&stride, &sw, &sh);
+    if (!fi || !w || !bb || !gfx_available() || !g_gui_enabled) return -1;
+    int was_on = termrender_gpu(), was_m = termrender_method();
+    termrender_set_gpu(1);
+    termrender_set_method(m);
+    int mx = g_ptr_drawn_x, my = g_ptr_drawn_y;
+    render_desktop(fi, mx, my);
+    int was = terminal_vt_get_active();
+    terminal_vt_set_active(vt);
+    terminal_write(text);
+    terminal_vt_set_active(was);
+    uint32_t before = termrender_stats()->cells_drawn;
+    int fast = term_fast_frame(fi, mx, my);
+    *cells = (int)(termrender_stats()->cells_drawn - before);
+    term_cache_t* tc = &g_tcache[w - g_terms];
+    int x = tc->cx, y = tc->cy, cw = tc->cols * tc->cw, ch = tc->rows * tc->ch;
+    uint32_t* a = fast ? (uint32_t*)kmalloc((size_t)cw * ch * 4) : NULL;
+    int same = -1;
+    if (a) {
+        for (int r = 0; r < ch; r++) memcpy(a + r * cw, bb + (y + r) * stride + x, (size_t)cw * 4);
+        render_desktop(fi, mx, my);                     /* (and now all of it) */
+        same = 1;
+        for (int r = 0; r < ch && same; r++) same = !memcmp(a + r * cw, bb + (y + r) * stride + x, (size_t)cw * 4);
+        kfree(a);
+    }
+    termrender_set_method(was_m);
+    termrender_set_gpu(was_on);
+    g_force_redraw = 1;
+    return same;
+}
+
 /* (selftest) the match shown: 1 and where, 0 none */
 int gui_term_find_match(int vt, int* row, int* col) {
     term_win_t* w = term_of_vt(vt);
@@ -3165,8 +3285,32 @@ static void open_taskbar_menu(const fb_info_t* fi, int mx, int my) {
 }
 
 /* a terminal window */
-enum { TM_COPY = 1, TM_PASTE, TM_CLEAR, TM_MINIMIZE, TM_CLOSE, TM_NEW, TM_COLORS, TM_NEWTAB, TM_SCHEME = 100 };
+enum { TM_COPY = 1, TM_PASTE, TM_CLEAR, TM_MINIMIZE, TM_CLOSE, TM_NEW, TM_COLORS, TM_NEWTAB, TM_RENDER,
+       TM_GPU_ON, TM_GPU_OFF, TM_R_CELLS, TM_R_VIRGL, TM_SCHEME = 100 };
 static int g_tmenu_term, g_tmenu_x, g_tmenu_y;
+
+/* Rendering...: GPU rendering on / off, and which renderer */
+static void term_render_cb(int id, void* arg) {
+    (void)arg;
+    if (id == TM_GPU_ON || id == TM_GPU_OFF) termrender_set_gpu(id == TM_GPU_ON);
+    if (id == TM_R_CELLS || id == TM_R_VIRGL) { termrender_set_method(id == TM_R_VIRGL ? TR_VIRGL : TR_CELLS); termrender_set_gpu(1); }
+    g_force_redraw = 1;
+}
+static void open_term_render_menu(void) {
+    int on = termrender_gpu(), m = termrender_method(), vg = trv_available();
+    const char* dot = "\xE2\x80\xA2";
+    char l[4][48];
+    ksnprintf(l[0], sizeof(l[0]), "%s GPU rendering on", on ? dot : " ");
+    ksnprintf(l[1], sizeof(l[1]), "%s GPU rendering off", on ? " " : dot);
+    ksnprintf(l[2], sizeof(l[2]), "%s Changed cells only", on && m == TR_CELLS ? dot : " ");
+    ksnprintf(l[3], sizeof(l[3]), "%s VirGL (the card)%s", on && m == TR_VIRGL ? dot : " ", vg ? "" : " - not here");
+    ctx_item_t items[] = {
+        { l[0], TM_GPU_ON, 0 }, { l[1], TM_GPU_OFF, 0 }, { CTX_SEP, 0, 0 },
+        { l[2], TM_R_CELLS, 0 }, { l[3], TM_R_VIRGL, !vg },
+    };
+    ctxmenu_open(g_tmenu_x, g_tmenu_y, items, 5, term_render_cb, NULL);
+    ctxmenu_select_first();
+}
 
 /* Colours...: the schemes, the one in use marked */
 static void term_colors_cb(int id, void* arg) {
@@ -3200,6 +3344,7 @@ static void term_menu_cb(int id, void* arg) {
     case TM_CLOSE: w->open = 0; g_tb_gen++; break;
     case TM_NEW: do_action(ACT_TERMINAL); break;
     case TM_COLORS: open_term_colors_menu(); break;
+    case TM_RENDER: open_term_render_menu(); break;
     case TM_NEWTAB: bring_term_front(g_tmenu_term); g_front_app = -1; term_new_tab(w); break;
     }
 }
@@ -3215,6 +3360,7 @@ static void open_term_menu(int wi, int mx, int my) {
         { "Paste", TM_PASTE, n == 0 },
         { "Clear", TM_CLEAR, 0 },
         { "Colours...", TM_COLORS, 0 },
+        { "Rendering...", TM_RENDER, 0 },
         { CTX_SEP, 0, 0 },
         { "New terminal", TM_NEW, 0 },
         { "New tab", TM_NEWTAB, g_terms[wi].ntabs >= TERM_TABS },
@@ -3258,6 +3404,43 @@ static void gui_poll_body(void);
 /* While a task is in here (drawing the desktop), the timer interrupt
  * leaves the pointer alone (gui_cursor_tick); not while it waits in
  * task_yield. A counter: tasks can be in here at the same time. */
+/* GPU rendering (kernel/termrender.h): when only terminal text changed and
+ * the window it changed in is the top one, with nothing over it, its
+ * changed cells are drawn instead of the whole desktop; 1 if done */
+static int term_fast_frame(const fb_info_t* fi, int mx, int my) {
+    if (!termrender_gpu()) return 0;
+    if (g_menu_open || ctxmenu_is_open() || g_osd_shown || g_desk_osd || g_sw_open || g_tv_open || g_cb_open || g_bar_kb ||
+        g_ask.open || nettray_is_open() || g_dnd_on) return 0;
+    win_rect_t pr;
+    if (winframe_preview(&pr)) return 0;
+    int top = -1;                                       /* the window drawn last */
+    for (int pass = 0; pass < 2; pass++)
+        for (int j = 0; j < g_nz; j++)
+            if (z_ontop(g_z[j]) == pass && z_shown(g_z[j])) top = g_z[j];
+    if (top < 0 || (top >> 8) != WK_TERM) return 0;
+    term_win_t* w = &g_terms[top & 0xFF];
+    term_cache_t* tc = &g_tcache[top & 0xFF];
+    if (w->finding || !tc->valid || tc->cy + tc->rows * tc->ch > (int)fi->height - BAR_H) return 0;
+    for (int i = 0; i < TERM_WIN_MAX; i++) {            /* the windows under it: nothing changed there */
+        if (i == (top & 0xFF) || !TERM_SHOWN(&g_terms[i])) continue;
+        int z = zoom_push(&g_terms[i]);
+        int n = term_cells(fi, &g_terms[i], TC_DRY, g_tcache[i].cx, g_tcache[i].cy, g_tcache[i].cols, g_tcache[i].rows);
+        zoom_pop(z);
+        if (n) return 0;
+    }
+    int z = zoom_push(w);
+    int n = term_cells(fi, w, TC_FAST, tc->cx, tc->cy, tc->cols, tc->rows);
+    zoom_pop(z);
+    if (n < 0) return 0;
+    if (g_hw_shape < 0 && g_ptr_drawn_x >= 0)           /* (as render_desktop: the software pointer drawn again) */
+        fb_present_rect(g_ptr_drawn_x + CURSOR_X0, g_ptr_drawn_y + CURSOR_Y0, CURSOR_W, CURSOR_H);
+    fb_present_damage();
+    draw_cursor(mx, my);
+    termrender_stats()->cells++;
+    termrender_stats()->cells_drawn += (uint32_t)n;
+    return 1;
+}
+
 void gui_poll(void) {
     if(crash_in_progress()) { crash_stop_secondary(); return; }
     if(crash_preview_active()) { task_sleep_ms(10); return; }
@@ -3776,7 +3959,16 @@ static void gui_poll_body(void) {
         if (!g_force_redraw && (uint32_t)(now - last_frame_ms) < 16) return;
         last_frame_ms = now;
 
+        gui_view_t same = view;                         /* only terminal text changed: maybe just its cells */
+        same.term_gen = g_last_view.term_gen;
+        if (!g_force_redraw && !memcmp(&same, &g_last_view, sizeof(view)) && term_fast_frame(fi, mx, my)) {
+            g_ptr_drawn_x = mx;
+            g_ptr_drawn_y = my;
+            g_last_view = view;
+            return;
+        }
         render_desktop(fi, mx, my);
+        termrender_stats()->full++;
         g_ptr_drawn_x = mx;
         g_ptr_drawn_y = my;
         g_last_view = view;
@@ -4730,7 +4922,7 @@ static void desk_cell_at(const fb_info_t* fi, int mx, int my, int* col, int* row
 
 /* ── what is being dragged ── */
 static char g_dnd[64][FS_PATH_LEN];
-static int  g_ndnd, g_dnd_src, g_dnd_on;
+static int  g_ndnd, g_dnd_src;
 static int  g_dnd_icons[DESK_MAX], g_ndnd_icons;     /* (from the desktop: the icons, to move them) */
 static int  g_dnd_from_col, g_dnd_from_row;
 

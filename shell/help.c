@@ -235,6 +235,12 @@ static const page_t PAGES[] = {
       "Lists the colour schemes of the terminal windows, with their 16 colours, the one in use marked; with a name, uses that one "
       "(kept for the next boot). Also: right-click a terminal window > Colours... The full-screen console keeps VGA's colours.",
       NULL, "termcolors\ntermcolors dracula\ntermcolors \"solarized dark\"\ntermcolors classic", "clear" },
+    { "termrender", "desktop", "termrender [on | off] [cells | virgl] | stats", "the terminal windows' GPU rendering",
+      "GPU rendering on: when only a terminal's text changed, only the cells that changed are drawn (cells), or put together "
+      "on the graphics card through VirGL (virgl: a virtio-gpu with 3D, in a VM) - instead of the whole desktop. Off: the whole "
+      "desktop each time, as before. Kept for the next boot; also in a terminal window's menu > Rendering... "
+      "stats: how many frames went which way.",
+      NULL, "termrender\ntermrender off\ntermrender on virgl\ntermrender stats", "termcolors" },
     { "boottime", "system", "boottime", "where the boot's time went, step by step",
       "Each step of the boot - the kernel's (heap, graphics, timer, cores, network, disks...), the shell's (the "
       "installed disk, apps, servers), the login and the desktop's first frame - with when it started and how "

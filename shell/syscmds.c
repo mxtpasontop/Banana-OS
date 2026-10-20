@@ -25,6 +25,7 @@
 #include "diskbench.h"
 #include "../kernel/ext4.h"
 #include "../kernel/termcolors.h"
+#include "../kernel/termrender.h"
 
 static void say(const char* fmt, ...) {
     char buf[256];
@@ -394,6 +395,31 @@ int syscmd_dispatch(const char* line) {
             terminal_write(sw);
         }
         terminal_write("\x1b[0m\n");
+        return 1;
+    }
+    if (strcmp(argv[0], "termrender") == 0) {
+        /* GPU rendering of the terminal windows: on / off, which renderer */
+        for (int i = 1; i < argc; i++) {
+            if (!strcmp(argv[i], "on") || !strcmp(argv[i], "off")) termrender_set_gpu(!strcmp(argv[i], "on"));
+            else if (!strcmp(argv[i], "cells") || !strcmp(argv[i], "virgl")) {
+                termrender_set_method(!strcmp(argv[i], "virgl") ? TR_VIRGL : TR_CELLS);
+                termrender_set_gpu(1);
+            } else if (!strcmp(argv[i], "stats")) {
+                termrender_stats_t* st = termrender_stats();
+                char line[160];
+                ksnprintf(line, sizeof(line), "frames: %u whole desktops, %u of changed cells only (%u cells), %u through VirGL",
+                          st->full, st->cells, st->cells_drawn, st->virgl);
+                terminal_writeln(line);
+                return 1;
+            } else { terminal_writeln("usage: termrender [on | off] [cells | virgl] | stats"); return 1; }
+        }
+        char line[160];
+        ksnprintf(line, sizeof(line), "GPU rendering: %s, renderer: %s%s", termrender_gpu() ? "on" : "off",
+                  termrender_method_name(termrender_method()),
+                  termrender_method() == TR_VIRGL && !trv_available() ? " (no VirGL here: changed cells, in software)" : "");
+        terminal_writeln(line);
+        ksnprintf(line, sizeof(line), "VirGL: %s", trv_status());
+        terminal_writeln(line);
         return 1;
     }
     if (strcmp(argv[0], "taskmgr") == 0) {

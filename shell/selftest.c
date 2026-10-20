@@ -22,6 +22,7 @@
 #include "../kernel/usb.h"
 #include "../kernel/gui.h"
 #include "../kernel/termcolors.h"
+#include "../kernel/termrender.h"
 #include "../kernel/settings.h"
 #include "../kernel/gfx.h"
 #include "../kernel/browser_test.h"
@@ -519,6 +520,20 @@ static void t_terminal(void) {
     ksnprintf(note, sizeof(note), "%d schemes; Dracula's background %06x, saved as \"%s\"", termcolors_count(), termcolors_rgb(0), saved_name);
     termcolors_set(had);
     report("colour schemes: found by name, used, saved", ok, note);
+    int gpu_was = termrender_gpu(), m_was = termrender_method();
+    termrender_set_gpu(0);
+    termrender_set_method(TR_VIRGL);
+    char g1[8] = "", g2[8] = "";
+    settings_get("term_gpu", g1, sizeof(g1));
+    settings_get("term_renderer", g2, sizeof(g2));
+    ok = !termrender_gpu() && termrender_method() == TR_VIRGL && !strcmp(g1, "off") && !strcmp(g2, "virgl");
+    termrender_set_method(m_was);
+    termrender_set_gpu(gpu_was);
+    ksnprintf(note, sizeof(note), "saved as term_gpu=%s, term_renderer=%s; back to %s, %s", g1, g2, gpu_was ? "on" : "off",
+              termrender_method_name(m_was));
+    report("GPU rendering: on / off and the renderer, saved", ok, note);
+    if (trv_available()) trv_tests(report);
+    else skip("the VirGL renderer", trv_status());
 
     /* ── Tab completion ── */
     section("the terminal: Tab completion");
@@ -607,6 +622,18 @@ static void t_terminal(void) {
     ksnprintf(note, sizeof(note), "%d tab(s), %d with the new one (vt %d, in front: %d), back: %d, closed: %d", tn0, tn1, nvt,
               focus_new, focus_back, tn2);
     report("tabs: a new one, Ctrl+Tab back, closing it", ok, note);
+
+    /* GPU rendering: drawing only the changed cells gives the same pixels as drawing all again */
+    for (int m = TR_CELLS; m <= TR_VIRGL; m++) {
+        if (m == TR_VIRGL && !trv_available()) { skip("GPU rendering through VirGL", trv_status()); break; }
+        int cells = 0;
+        int same = gui_term_render_check(was, m, m == TR_CELLS ? "  render check: caf\xC3\xA9 \x1b[31mred\x1b[0m\n" :
+                                                                  "  virgl check: \x1b[1;32mgreen\x1b[0m ok\n", &cells);
+        ksnprintf(note, sizeof(note), same < 0 ? "could not be tried (the window not in front?)" : "%d cells drawn, the same as all of it: %s",
+                  cells, same > 0 ? "yes" : "no");
+        report(m == TR_CELLS ? "GPU rendering, changed cells: the same pixels as a whole redraw" :
+                               "GPU rendering through VirGL: the same pixels as a whole redraw", same > 0 && cells > 0, note);
+    }
     if (keep) clipboard_set(saved, saved_len);
 
     /* Ctrl+= / Ctrl+- / Ctrl+0: the window's own text size */

@@ -70,6 +70,9 @@ selftest terminal        the terminal's scrollback: lines that scroll off a 5-ro
                          (UTF-8, trailing blanks cut), nothing selected: not copied
                          and still copied right after output pushed it up
                          tabs: a new one in front (its vt has the keys), back, closed
+                         GPU rendering: changed cells and VirGL (with virtio-vga-gl)
+                         give the pixels of a whole redraw; VirGL tiles read back
+                         exact; on / off and the renderer saved
                          and Ctrl+= / Ctrl+0: the window's own text size (fewer cells,
                          then back to Settings' size and its old grid)
                          and Ctrl+Shift+F: two marks found, newest first, the older one
