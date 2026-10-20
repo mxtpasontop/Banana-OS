@@ -35,6 +35,16 @@ int gui_term_select(int vt, int on, int r0, int c0, int r1, int c1);
  * smaller (-1), back to Settings > Fonts' (0); 0 if vt has no window */
 int gui_term_zoom(int vt, int delta);
 int gui_term_text_size(int vt);       /* (the size it draws in; -1: no window) */
+/* Ctrl+Shift+F: the find bar of vt's terminal window - opened (if open: the
+ * next older match); 0 if vt has no window. While it is open the shell
+ * gives it its keys: characters, Backspace, Enter (Shift: newer), the
+ * arrows (GUI_FIND_OLDER / NEWER), Esc (closes it). */
+#define GUI_FIND_OLDER 0x101
+#define GUI_FIND_NEWER 0x102
+int  gui_term_find_open(int vt);
+int  gui_term_finding(int vt);
+void gui_term_find_key(int vt, int key);
+int  gui_term_find_match(int vt, int* row, int* col);    /* (selftest) the match shown */
 
 /* Closes the GUI terminal window that owns `vt` (same as clicking its 'x'
  * button). Used by the shell's "exit" builtin. Returns 1 if a window was

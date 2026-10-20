@@ -599,6 +599,28 @@ static void t_terminal(void) {
     ok = s1 != s0 && fewer && s2 == gfx_text_size() && w2 == w0 && h2 == h0;
     ksnprintf(note, sizeof(note), "size %d -> %d (%dx%d cells -> %dx%d), Ctrl+0: %d, %dx%d", s0, s1, w0, h0, zw, zh, s2, w2, h2);
     report("Ctrl+= / Ctrl+- / Ctrl+0: the window's text size", ok, note);
+
+    /* Ctrl+Shift+F: two marks, one pushed into the scrollback, found newest first */
+    char mark[24];
+    ksnprintf(mark, sizeof(mark), "zq%u-mark", timer_ms() % 9000u + 1000u);  /* (not on screen before) */
+    char line[48];
+    ksnprintf(line, sizeof(line), "  %s one\n", mark);
+    terminal_write(line);
+    for (int i = 0; i < terminal_get_height() + 5; i++) terminal_write("  .\n");
+    ksnprintf(line, sizeof(line), "    %s two\n", mark);
+    terminal_write(line);
+    gui_term_find_open(was);
+    for (const char* p = mark; *p; p++) gui_term_find_key(was, *p >= 'a' && *p <= 'z' ? *p - 32 : *p);   /* (in capitals: any case) */
+    int r1 = 0, c1 = 0, r2 = 0, c2 = 0, r3 = 0, c3 = 0;
+    int f1 = gui_term_find_match(was, &r1, &c1);
+    gui_term_find_key(was, GUI_FIND_OLDER);
+    int f2 = gui_term_find_match(was, &r2, &c2), back = terminal_vt_view(was);
+    gui_term_find_key(was, GUI_FIND_OLDER);              /* (no older one: it stays) */
+    int f3 = gui_term_find_match(was, &r3, &c3);
+    gui_term_find_key(was, 27);
+    ok = f1 && c1 == 4 && f2 && c2 == 2 && r2 < 0 && back > 0 && f3 && r3 == r2 && !gui_term_finding(was) && !terminal_vt_view(was);
+    ksnprintf(note, sizeof(note), "newest at row %d col %d, older at %d col %d (view %d lines back), Esc", r1, c1, r2, c2, back);
+    report("Ctrl+Shift+F finds in the text and the scrollback", ok, note);
 }
 
 /* ── neofetch's GPU lines: the real controllers, the active one named ── */

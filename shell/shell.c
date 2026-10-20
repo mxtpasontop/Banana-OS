@@ -2277,6 +2277,23 @@ static void shell_readline(char* buf, int maxlen, int persona) {
             gui_term_zoom(my_vt, c == '0' ? 0 : c == '-' || c == '_' ? -1 : 1))
             continue;
 
+        /* Ctrl+Shift+F: find in the window's text and scrollback; while its bar
+         * is open, the keys are its */
+        if (c == 6 && (keyboard_mods() & 1) && gui_term_find_open(my_vt)) continue;
+        if (gui_term_finding(my_vt)) {
+            if (c == 27) {
+                char c2 = esc_follow();
+                if (c2 == '[') {
+                    char c3 = esc_follow();
+                    if (c3 == 'A' || c3 == 'B') gui_term_find_key(my_vt, c3 == 'A' ? GUI_FIND_OLDER : GUI_FIND_NEWER);
+                    continue;
+                }
+                if (c2) keyboard_unget(c2);
+            }
+            gui_term_find_key(my_vt, (unsigned char)c);
+            continue;
+        }
+
         if (c == 27) {
             /* Escape, or the lead byte of an arrow-key sequence
              * (ESC [ A/B/C/D). This has to be resolved before

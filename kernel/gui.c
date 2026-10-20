@@ -221,6 +221,9 @@ typedef struct {
     int px, py;                   /* where a drag started */
     int desk, top;                /* its virtual desktop; always on top */
     int zoom;                     /* Ctrl+= / Ctrl+-: its text size + 1 (0: Settings > Fonts') */
+    int finding;                  /* Ctrl+Shift+F: the find bar is open */
+    char fq[64];                  /* ... what it looks for (UTF-8) */
+    int f_found, f_row, f_col;    /* the match shown (buffer rows: < 0 the scrollback) */
 } term_win_t;
 
 /* shown: open, not minimized, on the desktop shown */
@@ -564,6 +567,84 @@ static void term_cell_at(const term_win_t* w, int mx, int my, int* r, int* c) {
     *c = x;
 }
 
+/* ── find in the scrollback (Ctrl+Shift+F) ── */
+static uint32_t fold_cp(uint32_t c) {                   /* (ASCII and Latin-1 letters: any case) */
+    if ((c >= 'A' && c <= 'Z') || (c >= 0xC0 && c <= 0xDE && c != 0xD7)) return c + 32;
+    return c;
+}
+
+/* the query as code points, folded: how many */
+static int find_query(const term_win_t* w, uint32_t* q, int cap) {
+    int n = 0, len = (int)strlen(w->fq);
+    for (int i = 0; i < len && n < cap; ) q[n++] = fold_cp(u8_decode(w->fq, len, &i));
+    return n;
+}
+
+static int find_match_at(const term_win_t* w, const uint32_t* chars, const uint8_t* cols, int stride, int tw,
+                         int row, int col, const uint32_t* q, int n) {
+    if (col + n > tw) return 0;
+    for (int k = 0; k < n; k++) {
+        uint32_t c;
+        uint8_t co;
+        term_cell(w, chars, cols, stride, row, col + k, &c, &co);
+        if (fold_cp(c ? c : ' ') != q[k]) return 0;
+    }
+    return 1;
+}
+
+/* the window's text rows (the window's grid, the cursor followed) */
+static int term_win_rows(const term_win_t* w, int th) {
+    int r = (w->h - TERM_TITLE_H - TERM_PAD * 2) / term_ch(w);
+    return r > th ? th : r;
+}
+
+/* the next match from (f_row, f_col) - older (dir < 0) or newer - or, with
+ * none yet, the newest; the view scrolled to show it */
+static void term_find(term_win_t* w, int dir, int from_end) {
+    const uint32_t* chars;
+    const uint8_t* cols;
+    int tw, th, stride;
+    terminal_vt_get_buffer(w->vt, &chars, &cols, &tw, &th, &stride);
+    uint32_t q[64];
+    int n = find_query(w, q, 64);
+    if (!n) { w->f_found = 0; return; }
+    int hist = terminal_vt_history(w->vt);
+    int row = w->f_row, col = w->f_col;
+    if (from_end || !w->f_found) { row = th - 1; col = tw; dir = -1; }      /* (from the bottom, up) */
+    else col += dir;
+    for (;;) {
+        if (dir < 0) {
+            for (; col >= 0; col--)
+                if (find_match_at(w, chars, cols, stride, tw, row, col, q, n)) goto found;
+            if (--row < -hist) break;
+            col = tw - 1;
+        } else {
+            for (; col < tw; col++)
+                if (find_match_at(w, chars, cols, stride, tw, row, col, q, n)) goto found;
+            if (++row >= th) break;
+            col = 0;
+        }
+    }
+    if (from_end || !w->f_found) w->f_found = 0;        /* (none: an older / newer one keeps the last) */
+    return;
+found:
+    w->f_found = 1;
+    w->f_row = row;
+    w->f_col = col;
+    /* in view: else the view moved to put it in the middle */
+    int rows = term_win_rows(w, th);
+    int base = term_view_base(w, rows, th);
+    if (row >= base && row < base + rows) return;
+    int row_off = term_row_off(w, rows, th), max = hist + row_off;
+    int back = row_off - (row - rows / 2);
+    terminal_vt_set_view(w->vt, back < 0 ? 0 : back > max ? max : back, max);
+}
+
+static term_win_t* term_of_vt(int vt) {
+    for (int i = 0; i < TERM_WIN_MAX; i++) if (g_terms[i].open && g_terms[i].vt == vt) return &g_terms[i];
+    return NULL;
+}
+
 static int term_cell_selected(const term_win_t* w, int r, int c) {
     if (!w->sel) return 0;
     int r0 = w->s_r0, c0 = w->s_c0, r1 = w->s_r1, c1 = w->s_c1;
@@ -642,6 +723,7 @@ static int open_new_terminal(void) {
         g_terms[i].dragging = 0;
         g_terms[i].sel = 0;
         g_terms[i].zoom = 0;                     /* (Settings > Fonts' size) */
+        g_terms[i].finding = 0;
         term_apply_size(&g_terms[i]);
         bring_term_front(i);
         return i;
@@ -721,11 +803,26 @@ static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
     terminal_vt_get_cursor(win->vt, &cr, &cc);
     int base = term_view_base(win, max_rows, th);      /* (scrolled back: lines of the scrollback on top) */
 
+    uint32_t fq[64];
+    int fqn = win->finding ? find_query(win, fq, 64) : 0;
     for (int y = 0; y < max_rows; y++) {
+        uint8_t hl[256];                                /* the find bar's matches: 1, the one shown: 2 */
+        if (fqn) {
+            memset(hl, 0, sizeof(hl));
+            for (int x = 0; x + fqn <= tw && x < 256; x++)
+                if (find_match_at(win, chars, cols, stride, tw, y + base, x, fq, fqn)) {
+                    int cur = win->f_found && win->f_row == y + base && win->f_col == x;
+                    for (int k = 0; k < fqn && x + k < 256; k++) hl[x + k] = cur ? 2 : 1;
+                }
+        }
         for (int x = 0; x < max_cols; x++) {
             uint8_t color;
             uint32_t c;
             term_cell(win, chars, cols, stride, y + base, x, &c, &color);
+            if (fqn && x < 256 && hl[x]) {
+                gfx_draw_cell_cp(cx + x * CW, cy + y * CH, c ? c : ' ', 0x00101010u, hl[x] == 2 ? 0x00FF9632u : 0x00E8D24Au);
+                continue;
+            }
             if (term_cell_selected(win, y + base, x)) {     /* selection: inverted */
                 gfx_draw_cell_cp(cx + x * CW, cy + y * CH, c ? c : ' ', 0x00101010u, 0x00C8D8F0u);
                 continue;
@@ -738,6 +835,19 @@ static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
     }
 
     gfx_draw_grip(w.x + w.w, w.y + w.h);
+
+    if (win->finding) {                                 /* the find bar, over the bottom of the text */
+        int bh = 16, by = cy + ch - bh;
+        gfx_fill_rect(cx, by - 1, cw, bh + 1, 0x00505A6Cu);
+        gfx_fill_rect(cx, by, cw, bh, 0x002A303Bu);
+        char bar[160];
+        ksnprintf(bar, sizeof(bar), "Find: %s_", win->fq);
+        gfx_draw_text(cx + 6, by + 4, bar, 0x00F2F7FFu, 0x002A303Bu);
+        const char* st = !win->fq[0] ? "Enter: older  Shift+Enter: newer  Esc" : win->f_found ? "Enter: older  Shift+Enter: newer" : "not found";
+        int sw = (int)strlen(st) * 8;
+        if (cx + 6 + (int)u8_cols(bar, (int)strlen(bar)) * 8 + 16 + sw < cx + cw)
+            gfx_draw_text(cx + cw - sw - 6, by + 4, st, win->f_found || !win->fq[0] ? 0x0098A4B8u : 0x00FF7A7Au, 0x002A303Bu);
+    }
 
     {
         int scr_row = (int)cr - base;                 /* (scrolled back: below the window) */
@@ -2310,6 +2420,58 @@ int gui_term_text_size(int vt) {
     for (int i = 0; i < TERM_WIN_MAX; i++)
         if (g_terms[i].open && g_terms[i].vt == vt) return g_terms[i].zoom ? g_terms[i].zoom - 1 : gfx_text_size();
     return -1;
+}
+
+/* Ctrl+Shift+F in vt's terminal window: the find bar opened (open: the next
+ * older match); 0 if vt has no window */
+int gui_term_find_open(int vt) {
+    term_win_t* w = term_of_vt(vt);
+    if (!w) return 0;
+    if (w->finding) term_find(w, -1, 0);
+    else { w->finding = 1; w->fq[0] = 0; w->f_found = 0; }
+    g_force_redraw = 1;
+    return 1;
+}
+int gui_term_finding(int vt) { term_win_t* w = term_of_vt(vt); return w && w->finding; }
+
+/* a key while it is open: a character of what to find, Backspace, Enter
+ * (Shift: newer), GUI_FIND_OLDER / NEWER (the arrows), Esc closes it */
+void gui_term_find_key(int vt, int key) {
+    term_win_t* w = term_of_vt(vt);
+    if (!w || !w->finding) return;
+    size_t n = strlen(w->fq);
+    if (key == 27) {                                    /* closed: the view back down */
+        w->finding = 0;
+        terminal_vt_set_view(vt, 0, 0);
+    } else if (key == '\n' || key == '\r') {
+        term_find(w, (keyboard_mods() & 1) ? 1 : -1, 0);
+    } else if (key == GUI_FIND_OLDER || key == GUI_FIND_NEWER) {
+        term_find(w, key == GUI_FIND_OLDER ? -1 : 1, 0);
+    } else if (key == 8 || key == 127) {
+        if (n) { n = (size_t)u8_backspace(w->fq, (int)n); w->fq[n] = 0; term_find(w, -1, 1); }
+    } else if ((unsigned char)key >= 0x20 && key != 127 && n + 1 < sizeof(w->fq)) {
+        w->fq[n] = (char)key;
+        w->fq[n + 1] = 0;
+        if (((unsigned char)key & 0xC0) != 0x80 && (unsigned char)key >= 0xC0) return;      /* (a UTF-8 character's first byte: the rest to come) */
+        if ((unsigned char)key >= 0x80) {               /* (the character done when its last byte is there) */
+            int i = (int)n;
+            while (i > 0 && ((unsigned char)w->fq[i] & 0xC0) == 0x80) i--;
+            unsigned char lead = (unsigned char)w->fq[i];
+            int need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+            if ((int)(n + 1) - i < need) return;
+        }
+        term_find(w, -1, 1);
+    }
+    g_force_redraw = 1;
+}
+
+/* (selftest) the match shown: 1 and where, 0 none */
+int gui_term_find_match(int vt, int* row, int* col) {
+    term_win_t* w = term_of_vt(vt);
+    if (!w || !w->finding || !w->f_found) return 0;
+    *row = w->f_row;
+    *col = w->f_col;
+    return 1;
 }
 
 /* (selftest) the selection of vt's terminal window set, or taken away (on 0): 0 if vt has no window */

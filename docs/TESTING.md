@@ -70,6 +70,8 @@ selftest terminal        the terminal's scrollback: lines that scroll off a 5-ro
                          (UTF-8, trailing blanks cut), nothing selected: not copied
                          and Ctrl+= / Ctrl+0: the window's own text size (fewer cells,
                          then back to Settings' size and its old grid)
+                         and Ctrl+Shift+F: two marks found, newest first, the older one
+                         in the scrollback (the view scrolled to it), Esc back down
                          echo -e / -n (\t \e \x41 \0102 \\ \c; no -e: as typed);
                          a vt given out again: no title, scrollback or colour left
                          BEL: counted, the window flashing for 200 ms, nothing drawn
