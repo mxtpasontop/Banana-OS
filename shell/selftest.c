@@ -456,6 +456,22 @@ static void t_terminal(void) {
     ok = !strcmp(terminal_vt_title(vt), "My title") && hidden && terminal_vt_cursor_shown(vt) && !esc_left;
     ksnprintf(note, sizeof(note), "title \"%s\", cursor hidden then shown%s", terminal_vt_title(vt), esc_left ? ", an ESC left on screen" : "");
     report("the title, hiding the cursor, nothing of the codes on screen", ok, note);
+    static const struct { const char* seq; int shape; } cs[] = {
+        { "\x1b[2 q", TERM_CURSOR_BLOCK }, { "\x1b[4 q", TERM_CURSOR_UNDERLINE }, { "\x1b[6 q", TERM_CURSOR_BAR },
+        { "\x1b[1 qX", TERM_CURSOR_BLOCK }, { "\x1b[0 q", TERM_CURSOR_DEFAULT },
+    };
+    int csbad = -1;
+    terminal_vt_set_active(vt);
+    terminal_write("\x1b[2J\x1b[H");
+    for (unsigned i = 0; i < sizeof(cs) / sizeof(cs[0]); i++) {
+        terminal_write(cs[i].seq);
+        if (terminal_vt_cursor_shape(vt) != cs[i].shape && csbad < 0) csbad = (int)i;
+    }
+    terminal_vt_set_active(was);
+    ok = csbad < 0 && TCELL(0, 0) == 'X' && TCELL(0, 1) == ' ';
+    ksnprintf(note, sizeof(note), csbad < 0 ? "block, underline, bar, block, the default; only \"X\" drawn" : "step %d: shape %d", csbad,
+              csbad < 0 ? 0 : terminal_vt_cursor_shape(vt));
+    report("the cursor's shape (ESC [ n SP q)", ok, note);
     uint32_t bells = terminal_vt_bells(vt);
     terminal_vt_set_active(vt);
     terminal_write("\x1b[2J\x1b[Ha\ab");

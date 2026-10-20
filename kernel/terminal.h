@@ -112,6 +112,10 @@ int  terminal_vt_scroll_view(int vt, int delta);        /* + is back (up); 1 if 
  * none) and whether the cursor is shown (ESC [ ?25 l / h) */
 const char* terminal_vt_title(int vt);
 int  terminal_vt_cursor_shown(int vt);
+/* ... and its shape (ESC [ n SP q, as xterm: 1-2 a block, 3-4 an underline,
+ * 5-6 a bar; 0: the default, an underline) */
+enum { TERM_CURSOR_DEFAULT, TERM_CURSOR_BLOCK, TERM_CURSOR_UNDERLINE, TERM_CURSOR_BAR };
+int  terminal_vt_cursor_shape(int vt);
 /* BEL (\a): how many vt has had, and whether its window is flashing for one (200 ms) */
 uint32_t terminal_vt_bells(int vt);
 int  terminal_vt_ringing(int vt);

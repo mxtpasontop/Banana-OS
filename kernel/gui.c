@@ -737,8 +737,15 @@ static void draw_terminal_window(const fb_info_t* fi, const term_win_t* win) {
         if (scr_row >= 0 && scr_row < max_rows && (int)cc < max_cols && terminal_vt_cursor_shown(win->vt)) {
             int idx = (int)cr * stride + (int)cc;
             uint8_t color = cols[idx];
-            uint8_t fg = color & 0x0F;
-            gfx_fill_rect(cx + (int)cc * CW, cy + scr_row * CH + CH - 1, CW, 1, vga_color_rgb(fg));
+            uint32_t fg = vga_color_rgb(color & 0x0F);
+            int x = cx + (int)cc * CW, y = cy + scr_row * CH;
+            switch (terminal_vt_cursor_shape(win->vt)) {
+            case TERM_CURSOR_BLOCK:                     /* the character in reverse */
+                gfx_draw_cell_cp(x, y, chars[idx] ? chars[idx] : ' ', vga_color_rgb((color >> 4) & 0x0F), fg);
+                break;
+            case TERM_CURSOR_BAR: gfx_fill_rect(x, y, 2, CH, fg); break;
+            default: gfx_fill_rect(x, y + CH - 1, CW, 1, fg); break;
+            }
         }
     }
 }

@@ -56,6 +56,7 @@ static size_t  vt_rows[VT_MAX];
 typedef struct { uint32_t* ch; uint8_t* co; uint32_t head, count; } scrollback_t;
 static scrollback_t vt_sb[VT_MAX];
 static int          vt_back[VT_MAX];
+static uint8_t      vt_cshape[VT_MAX];        /* the cursor's shape: TERM_CURSOR_* (ESC [ n SP q) */
 
 static void sb_push(int vt, const uint32_t* ch, const uint8_t* co, size_t w) {
     scrollback_t* s = &vt_sb[vt];
@@ -230,10 +231,17 @@ static void fb_draw_cursor_overlay(size_t row, size_t col) {
     g_ov_row = row;
     g_ov_col = col;
 
-    uint8_t fg = vt_colors[CONSOLE_VT][row][col] & 0x0F;
+    uint8_t color = vt_colors[CONSOLE_VT][row][col];
     int scale = term_fb_scale < 1 ? 1 : term_fb_scale;
-    int h = (scale > 1) ? 2 : 1;
-    gfx_fill_rect((int)col * 8 * scale, (int)row * 8 * scale + (8 * scale - h), 8 * scale, h, vga_color_rgb(fg));
+    int x = (int)col * 8 * scale, y = (int)row * 8 * scale, h = (scale > 1) ? 2 : 1;
+    uint32_t fg = vga_color_rgb(color & 0x0F);
+    switch (vt_cshape[CONSOLE_VT]) {
+    case TERM_CURSOR_BLOCK:                             /* the character in reverse */
+        gfx_draw_char_scaled_cp(x, y, scale, vt_chars[CONSOLE_VT][row][col], vga_color_rgb((color >> 4) & 0x0F), fg);
+        break;
+    case TERM_CURSOR_BAR: gfx_fill_rect(x, y, h, 8 * scale, fg); break;
+    default: gfx_fill_rect(x, y + (8 * scale - h), 8 * scale, h, fg); break;
+    }
 }
 
 static void console_cursor(size_t* row, size_t* col) {
@@ -553,6 +561,7 @@ static uint8_t  es_cursor_off[VT_MAX];
 static char     es_osc[VT_MAX][80];
 static uint8_t  es_osc_n[VT_MAX];
 static char     vt_title[VT_MAX][64];
+static uint8_t  es_inter[VT_MAX];                  /* an intermediate byte (ESC [ 5 SP q: ' ') */
 static uint32_t vt_bell_ms[VT_MAX], vt_bells[VT_MAX];   /* the last BEL's time (0: none), how many */
 
 /* a vt given out again: none of the last owner's codes, colours or title */
@@ -563,6 +572,7 @@ static void es_reset(int vt) {
     es_bg[vt] = 0;
     vt_title[vt][0] = 0;
     vt_bell_ms[vt] = vt_bells[vt] = 0;
+    vt_cshape[vt] = es_inter[vt] = 0;
     vt_u8_need[vt] = 0;
 }
 
@@ -734,6 +744,14 @@ static void es_csi(int v, char f) {
     int n = es_np[v] ? es_p[v][0] : 0, n1 = n ? n : 1;
     size_t h = terminal_usable_height(), w = terminal_width();
     long r = (long)term_row, c = (long)term_col;
+    if (es_inter[v] == ' ' && f == 'q') {               /* ESC [ n SP q: the cursor's shape (xterm's DECSCUSR) */
+        uint8_t shape = n == 1 || n == 2 ? TERM_CURSOR_BLOCK : n == 3 || n == 4 ? TERM_CURSOR_UNDERLINE :
+                        n == 5 || n == 6 ? TERM_CURSOR_BAR : TERM_CURSOR_DEFAULT;
+        if (shape != vt_cshape[v] && v == CONSOLE_VT) { g_ov_valid = 0; mark_dirty(term_row); }   /* (the old one erased) */
+        vt_cshape[v] = shape;
+        return;
+    }
+    if (es_inter[v]) return;                             /* (other ones: not understood, ignored) */
     if (es_priv[v]) {                                    /* ESC [ ? ... */
         if ((f == 'h' || f == 'l') && n == 25) es_cursor_off[v] = f == 'l';
         return;
@@ -790,7 +808,7 @@ static int es_feed(unsigned char c) {
         return 1;
     case ES_ESC:
         es_state[v] = ES_TEXT;
-        if (c == '[') { es_state[v] = ES_CSI; es_np[v] = 0; es_priv[v] = 0; memset(es_p[v], 0, sizeof(es_p[v])); }
+        if (c == '[') { es_state[v] = ES_CSI; es_np[v] = 0; es_priv[v] = 0; es_inter[v] = 0; memset(es_p[v], 0, sizeof(es_p[v])); }
         else if (c == ']') { es_state[v] = ES_OSC; es_osc_n[v] = 0; }
         else if (c == '7') { es_save_r[v] = term_row; es_save_c[v] = term_col; }
         else if (c == '8') es_cursor((long)es_save_r[v], (long)es_save_c[v]);
@@ -817,6 +835,7 @@ static int es_feed(unsigned char c) {
             if (es_np[v] < ES_PARAMS) es_np[v]++;
             return 1;
         }
+        if (c >= 0x20 && c <= 0x2F) { es_inter[v] = (uint8_t)c; return 1; }
         if (c >= 0x40 && c <= 0x7E) { es_state[v] = ES_TEXT; es_csi(v, (char)c); return 1; }
         if (c < 0x20 || c > 0x7E) es_state[v] = ES_TEXT;  /* (broken: dropped) */
         return 1;
@@ -844,6 +863,7 @@ int terminal_vt_ringing(int vt) {
     return vt >= 0 && vt < VT_MAX && vt_bell_ms[vt] && (int32_t)(timer_ms() - vt_bell_ms[vt]) < 200;
 }
 const char* terminal_vt_title(int vt) { return vt >= 0 && vt < VT_MAX ? vt_title[vt] : ""; }
+int terminal_vt_cursor_shape(int vt) { return vt >= 0 && vt < VT_MAX ? vt_cshape[vt] : 0; }
 int terminal_vt_cursor_shown(int vt) { return vt >= 0 && vt < VT_MAX ? !es_cursor_off[vt] : 1; }
 
 void terminal_putchar(char c) {
