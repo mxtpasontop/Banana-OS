@@ -74,6 +74,7 @@ selftest terminal        the terminal's scrollback: lines that scroll off a 5-ro
                          a vt given out again: no title, scrollback or colour left
                          BEL: counted, the window flashing for 200 ms, nothing drawn
                          the cursor's shape: ESC [ n SP q (block, underline, bar, default)
+                         colour schemes: found by name, used, saved in settings.conf
 selftest opencl          installs and runs the cltest example: build errors in the
                          log, vadd, a 2D Mandelbrot range, atomics, math built-ins,
                          __local arguments, barrier(), local arrays, float4 / int /

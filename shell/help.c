@@ -231,6 +231,10 @@ static const page_t PAGES[] = {
       "USA's, Australia's...). Apps get it too: localtime(), strftime %z / %Z; Java reads /etc/timezone.",
       NULL, "timezone list europe\ntimezone new york\ntimezone UTC", "date" },
     { "uptime", "system", "uptime", "how long it has been running, the load average", NULL, NULL, NULL, "top" },
+    { "termcolors", "desktop", "termcolors [list | <scheme>]", "the terminal windows' colour scheme",
+      "Lists the colour schemes of the terminal windows, with their 16 colours, the one in use marked; with a name, uses that one "
+      "(kept for the next boot). Also: right-click a terminal window > Colours... The full-screen console keeps VGA's colours.",
+      NULL, "termcolors\ntermcolors dracula\ntermcolors \"solarized dark\"\ntermcolors classic", "clear" },
     { "boottime", "system", "boottime", "where the boot's time went, step by step",
       "Each step of the boot - the kernel's (heap, graphics, timer, cores, network, disks...), the shell's (the "
       "installed disk, apps, servers), the login and the desktop's first frame - with when it started and how "

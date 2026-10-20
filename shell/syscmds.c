@@ -24,6 +24,7 @@
 #include "datecmd.h"
 #include "diskbench.h"
 #include "../kernel/ext4.h"
+#include "../kernel/termcolors.h"
 
 static void say(const char* fmt, ...) {
     char buf[256];
@@ -366,6 +367,33 @@ int syscmd_dispatch(const char* line) {
         if (argc > 1 && !apps && page < 0) { terminal_writeln("usage: settings [apps [name] | time | keyboard]"); return 1; }
         if (!(apps ? gui_open_settings_app(argc > 2 ? argv[2] : NULL) : gui_open_settings())) terminal_writeln("settings: Settings is part of the desktop - run `startx` first");
         else if (page >= 0) settings_open_page(page);
+        return 1;
+    }
+    if (strcmp(argv[0], "termcolors") == 0) {
+        /* the terminal windows' colour scheme: list them, or choose one */
+        if (argc > 1 && strcmp(argv[1], "list")) {
+            char name[64] = "";
+            for (int i = 1; i < argc; i++) {                  /* (a name with spaces, quoted or not) */
+                if (i > 1) kstrlcat(name, " ", sizeof(name));
+                kstrlcat(name, argv[i], sizeof(name));
+            }
+            int k = termcolors_find(name);
+            if (k < 0) { terminal_writeln("termcolors: no such scheme - `termcolors` lists them"); return 1; }
+            termcolors_set(k);
+        }
+        for (int i = 0; i < termcolors_count(); i++) {
+            char line[64];
+            ksnprintf(line, sizeof(line), "%s %s", i == termcolors_current() ? "*" : " ", termcolors_name(i));
+            terminal_writeln(line);
+        }
+        /* the 16 colours of the one in use (in a terminal window: the scheme's) */
+        terminal_write("  ");
+        for (int c = 0; c < 16; c++) {
+            char sw[16];
+            ksnprintf(sw, sizeof(sw), "\x1b[%dm  ", c < 8 ? 40 + c : 100 + c - 8);
+            terminal_write(sw);
+        }
+        terminal_write("\x1b[0m\n");
         return 1;
     }
     if (strcmp(argv[0], "taskmgr") == 0) {

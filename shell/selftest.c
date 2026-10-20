@@ -21,6 +21,8 @@
 #include "../kernel/mouse_capture.h"
 #include "../kernel/usb.h"
 #include "../kernel/gui.h"
+#include "../kernel/termcolors.h"
+#include "../kernel/settings.h"
 #include "../kernel/gfx.h"
 #include "../kernel/browser_test.h"
 #include "ipv6test.h"
@@ -504,6 +506,19 @@ static void t_terminal(void) {
               again, terminal_vt_title(again), terminal_vt_history(again), again == vt ? co[0] : 0);
     report("a terminal given out again starts clean (title, scrollback, colours)", ok, note);
     if (again >= 0) terminal_vt_free(again);
+
+    /* ── colour schemes ── */
+    section("the terminal: colour schemes");
+    int had = termcolors_current(), sd = termcolors_find("solarized-DARK"), dr = termcolors_find("Dracula");
+    uint32_t gen = termcolors_generation();
+    termcolors_set(dr);
+    char saved_name[32] = "";
+    settings_get("term_colors", saved_name, sizeof(saved_name));
+    ok = sd >= 0 && dr >= 0 && termcolors_current() == dr && termcolors_rgb(0) == 0x282A36 && termcolors_rgb(12) == 0xFF6E6E &&
+         termcolors_generation() != gen && !strcmp(saved_name, "Dracula") && termcolors_find("no such") < 0;
+    ksnprintf(note, sizeof(note), "%d schemes; Dracula's background %06x, saved as \"%s\"", termcolors_count(), termcolors_rgb(0), saved_name);
+    termcolors_set(had);
+    report("colour schemes: found by name, used, saved", ok, note);
 
     /* ── Tab completion ── */
     section("the terminal: Tab completion");

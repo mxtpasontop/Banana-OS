@@ -86,7 +86,11 @@ int ctxmenu_click(int mx, int my) {
 }
 
 void ctxmenu_hover(int mx, int my) {
-    if (!g_open) return;
+    static int last_x = -1, last_y = -1;
+    int moved = mx != last_x || my != last_y;           /* (the mouse still: an item chosen with the keys stays) */
+    last_x = mx;
+    last_y = my;
+    if (!g_open || !moved) return;
     int i = item_at(mx, my);
     if (i >= 0 && g_dis[i]) i = -1;
     if (i != g_hover) { g_hover = i; g_gen++; }

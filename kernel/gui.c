@@ -26,6 +26,7 @@
 #include "passwd.h"
 #include "login.h"
 #include "utf8.h"
+#include "termcolors.h"
 #include "kheap.h"
 #include "appwin.h"
 #include "winframe.h"
@@ -254,15 +255,8 @@ static int g_term_order[TERM_WIN_MAX] = {0, 1, 2, 3};
 
 static void menu_activate(void);
 
-static uint32_t vga_color_rgb(uint8_t c) {
-    static const uint32_t pal[16] = {
-        0x00000000u, 0x000000AAu, 0x0000AA00u, 0x0000AAAAu,
-        0x00AA0000u, 0x00AA00AAu, 0x00AA5500u, 0x00AAAAAAu,
-        0x00555555u, 0x005555FFu, 0x0055FF55u, 0x0055FFFFu,
-        0x00FF5555u, 0x00FF55FFu, 0x00FFFF55u, 0x00FFFFFFu,
-    };
-    return pal[c & 0x0F];
-}
+/* a terminal window's colour c: the colour scheme's (kernel/termcolors.c) */
+static uint32_t vga_color_rgb(uint8_t c) { return termcolors_rgb(c); }
 
 static void draw_bevel_box(int x, int y, int w, int h, uint32_t base, uint32_t hi, uint32_t lo) {
     if (w <= 2 || h <= 2) return;
@@ -701,7 +695,7 @@ static void draw_terminal_text(const fb_info_t* fi, const term_win_t* win) {
     int cy = w.y + title_h + pad;
     int cw = w.w - pad * 2;
     int ch = w.h - title_h - pad * 2;
-    gfx_fill_rect(cx, cy, cw, ch, 0x00000000u);
+    gfx_fill_rect(cx, cy, cw, ch, vga_color_rgb(0));          /* (the scheme's background) */
 
     const uint32_t* chars;
     const uint8_t* cols;
@@ -1789,7 +1783,7 @@ static void capture_view(gui_view_t* v, uint32_t sec) {
         v->term_sel[i] = g_terms[i].sel ? g_terms[i].s_r0 * 7919 + g_terms[i].s_c0 * 31 + g_terms[i].s_r1 * 131 + g_terms[i].s_c1 + 1 : 0;
     }
     v->sec = sec;
-    v->term_gen = terminal_generation();
+    v->term_gen = terminal_generation() ^ termcolors_generation() * 0x9E3779B1u;
     v->wp_gen = wallpaper_generation();
     v->net_state = (net_if()->configured ? net_if()->ip : 1) ^ nettray_sig();
     v->front_app = g_front_app;
@@ -2808,8 +2802,28 @@ static void open_taskbar_menu(const fb_info_t* fi, int mx, int my) {
 }
 
 /* a terminal window */
-enum { TM_COPY = 1, TM_PASTE, TM_CLEAR, TM_MINIMIZE, TM_CLOSE, TM_NEW };
-static int g_tmenu_term;
+enum { TM_COPY = 1, TM_PASTE, TM_CLEAR, TM_MINIMIZE, TM_CLOSE, TM_NEW, TM_COLORS, TM_SCHEME = 100 };
+static int g_tmenu_term, g_tmenu_x, g_tmenu_y;
+
+/* Colours...: the schemes, the one in use marked */
+static void term_colors_cb(int id, void* arg) {
+    (void)arg;
+    if (id >= TM_SCHEME) termcolors_set(id - TM_SCHEME);
+    g_force_redraw = 1;
+}
+static void open_term_colors_menu(void) {
+    static char labels[CTX_MAX_ITEMS][40];
+    ctx_item_t items[CTX_MAX_ITEMS];
+    int n = 0;
+    for (int i = 0; i < termcolors_count() && n < CTX_MAX_ITEMS; i++, n++) {
+        ksnprintf(labels[n], sizeof(labels[n]), "%s %s", i == termcolors_current() ? "\xE2\x80\xA2" : "  ", termcolors_name(i));
+        items[n].label = labels[n];
+        items[n].id = TM_SCHEME + i;
+        items[n].disabled = 0;
+    }
+    ctxmenu_open(g_tmenu_x, g_tmenu_y, items, n, term_colors_cb, NULL);
+    ctxmenu_select_first();
+}
 
 static void term_menu_cb(int id, void* arg) {
     (void)arg;
@@ -2822,23 +2836,27 @@ static void term_menu_cb(int id, void* arg) {
     case TM_MINIMIZE: win_minimize(WK_TERM << 8 | g_tmenu_term); break;
     case TM_CLOSE: w->open = 0; g_tb_gen++; break;
     case TM_NEW: do_action(ACT_TERMINAL); break;
+    case TM_COLORS: open_term_colors_menu(); break;
     }
 }
 
 static void open_term_menu(int wi, int mx, int my) {
     g_tmenu_term = wi;
+    g_tmenu_x = mx;
+    g_tmenu_y = my;
     uint32_t n;
     clipboard_get(&n);
     ctx_item_t items[] = {
         { "Copy", TM_COPY, !g_terms[wi].sel },
         { "Paste", TM_PASTE, n == 0 },
         { "Clear", TM_CLEAR, 0 },
+        { "Colours...", TM_COLORS, 0 },
         { CTX_SEP, 0, 0 },
         { "New terminal", TM_NEW, 0 },
         { "Minimize", TM_MINIMIZE, 0 },
         { "Close", TM_CLOSE, 0 },
     };
-    ctxmenu_open(mx, my, items, 7, term_menu_cb, NULL);
+    ctxmenu_open(mx, my, items, (int)(sizeof(items) / sizeof(items[0])), term_menu_cb, NULL);
 }
 
 /* Notepad: its own Ctrl keys */
@@ -3907,6 +3925,9 @@ static int kb_global(int k) {
             } else open_desktop_menu((int)fi->width / 3, (int)fi->height / 3);
         } else if (g_front_app == APP_FILES) {
             explorer_menu_key();
+        } else if (g_front_app < 0 && front_term() >= 0) {    /* a terminal window: its menu, near its corner */
+            const term_win_t* t = &g_terms[front_term()];
+            open_term_menu(front_term(), t->x + 40, t->y + TERM_TITLE_H + 20);
         }
         if (ctxmenu_is_open()) ctxmenu_select_first();
         g_force_redraw = 1;
